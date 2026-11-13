@@ -81,7 +81,9 @@ code,
 }
 
 .page-shell {
+  width: 100%;
   max-width: 1140px;
+  min-width: 0;
   margin-inline: auto;
   padding: clamp(20px, 3vw, 36px) clamp(16px, 3vw, 28px) 56px;
 }
@@ -93,6 +95,11 @@ code,
   justify-content: space-between;
   gap: 16px 24px;
   margin-block-end: 20px;
+}
+
+.header-bar > div {
+  min-width: 0;
+  max-width: 100%;
 }
 
 .page-title {
@@ -408,6 +415,7 @@ code,
 .location-primary {
   font-weight: 500;
   color: var(--text-primary);
+  white-space: nowrap;
 }
 
 .location-id {
@@ -629,6 +637,9 @@ code,
   .control-select {
     font-size: 16px;
   }
+  .table-scroll {
+    overflow-x: visible;
+  }
   .ledger-table thead {
     display: none;
   }
@@ -638,6 +649,8 @@ code,
   .ledger-table tbody td {
     display: block;
     width: 100%;
+    max-width: 100%;
+    min-width: 0;
   }
   .ledger-row {
     padding: 14px 16px;
@@ -646,10 +659,16 @@ code,
   .ledger-table tbody td {
     padding: 6px 0;
     display: flex;
+    flex-wrap: wrap;
     align-items: flex-start;
     justify-content: space-between;
-    gap: 12px;
+    gap: 6px 12px;
     text-align: end;
+    overflow-wrap: anywhere;
+  }
+  .ledger-table tbody td > * {
+    min-width: 0;
+    max-width: 100%;
   }
   .ledger-table tbody td::before {
     content: attr(data-label);
@@ -660,6 +679,10 @@ code,
     color: var(--text-muted);
     text-align: start;
     flex-shrink: 0;
+  }
+  .reason-badge {
+    white-space: normal;
+    text-align: start;
   }
   .ledger-table tbody td.num {
     text-align: end;
