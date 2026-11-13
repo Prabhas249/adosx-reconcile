@@ -12,13 +12,7 @@ REF_PATTERN = re.compile(r'^(?:rec\s*-?\s*)?(\d+)$', re.IGNORECASE)
 
 
 def normalize_record_ref(raw: str | None) -> str:
-    """
-    Normalize System A / System B record references written in multiple formats:
-    - 'REC-1034'      -> 'REC-1034'
-    - 'rec1034'       -> 'REC-1034'
-    - ' REC - 1070 '  -> 'REC-1070'
-    - '1112'          -> 'REC-1112'
-    """
+    """Normalize references written as 'rec1034', ' REC - 1070 ', or '1112' to 'REC-XXXX'."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return ''
@@ -29,11 +23,7 @@ def normalize_record_ref(raw: str | None) -> str:
 
 
 def parse_decimal_safe(raw: str | None) -> tuple[Decimal | None, bool]:
-    """
-    Parse monetary strings cleanly without crashing on dirty data.
-    Handles Indian/US commas ('1,25,400.00') and currency symbols.
-    Returns (Decimal | None, has_parse_error).
-    """
+    """Parse monetary strings including commas ('1,25,400.00') without raising on blanks."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return None, True
@@ -51,7 +41,7 @@ def parse_decimal_safe(raw: str | None) -> tuple[Decimal | None, bool]:
 
 
 def parse_date_safe(raw: str | None) -> date | None:
-    """Parse ISO or common slash/dash dates; return None instead of crashing."""
+    """Parse common ISO and slash date strings, returning None on blanks or invalid dates."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return None
@@ -65,11 +55,7 @@ def parse_date_safe(raw: str | None) -> date | None:
 
 @transaction.atomic
 def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]:
-    """
-    Load locations.csv, system_a.csv, and system_b.csv into the database.
-    Never drops dirty rows: unparseable numbers, blank fields, and orphan refs
-    are preserved with their raw string alongside parsed fields.
-    """
+    """Load all three CSV files atomically, preserving raw text alongside parsed fields."""
     if replace:
         SystemBEntry.objects.all().delete()
         SystemARecord.objects.all().delete()

@@ -156,7 +156,7 @@ export default function DisagreementsPage() {
             color: '#991b1b',
           }}
         >
-          {error} — make sure the Django server is running on <code>127.0.0.1:8000</code>.
+          {error}. Make sure the Django server is running on <code>127.0.0.1:8000</code>.
         </div>
       )}
 
