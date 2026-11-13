@@ -24,12 +24,11 @@ interface ReasonOption {
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
 function ValueCell({ parsed, raw }: { parsed: string | null; raw: string }) {
+  const showRaw = Boolean(raw) && raw !== parsed && !(parsed === null && raw === '-');
   return (
     <td style={tdStyle}>
       {parsed ?? '-'}
-      {raw && raw !== parsed && (
-        <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {raw}</div>
-      )}
+      {showRaw && <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {raw}</div>}
     </td>
   );
 }
