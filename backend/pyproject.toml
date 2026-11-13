@@ -1,0 +1,11 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+exclude = ["reconcile/migrations", ".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C901", "PERF", "PIE", "RET", "PTH"]
+ignore = ["E501"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
