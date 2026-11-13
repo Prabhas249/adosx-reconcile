@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
+import './globals.css';
 
 export const metadata: Metadata = {
   title: 'ADOSX Disagreements',
@@ -9,17 +10,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body
-        style={{
-          fontFamily: 'system-ui, -apple-system, sans-serif',
-          margin: '24px auto',
-          maxWidth: '1080px',
-          padding: '0 16px',
-          color: '#111827',
-        }}
-      >
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

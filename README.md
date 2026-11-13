@@ -48,7 +48,7 @@ Install dev dependencies (`pip install -r backend/requirements-dev.txt`), then r
   - `VOIDED_IN_A`: `REC-1019` has `VOIDED` state in System A while active in System B (`ORG-B`)
   - `DATE_MISMATCH`: `REC-1009` date cutoff `2026-03-31` vs `2026-04-02` (`ORG-B`)
   - `TENANT_MISMATCH`: System A assigns `REC-1077` to `LOC-102` (`ORG-A`) while System B assigns it to `LOC-201` (`ORG-B`). Both orgs see the boundary disagreement with foreign identifiers redacted.
-- **Plain table UI** in [`page.tsx`](frontend/src/app/page.tsx) with an org switcher, reason filter, and sort control showing both parsed and raw values.
+- **Responsive table UI and row inspector** in [`page.tsx`](frontend/src/app/page.tsx) and [`globals.css`](frontend/src/app/globals.css) with a segmented org switcher, search box, reason filter, sort control, copyable record IDs, and a keyboard-accessible detail drawer showing parsed and raw CSV values.
 - **Automated tests** in [`tests.py`](backend/reconcile/tests.py) with 17 unit and API tests covering every disagreement reason in `REASON_LABELS` (including same-org `LOCATION_MISMATCH`), both non-error cases, unmapped locations, cross-tenant redaction, `/api/orgs/`, query parameter validation, value sorting with null amounts, and full CSV import counts.
 
 ## What I did not build

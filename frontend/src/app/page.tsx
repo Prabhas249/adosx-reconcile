@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 interface Disagreement {
   record_id: string;
@@ -21,14 +22,125 @@ interface ReasonOption {
   label: string;
 }
 
+type BadgeTone = 'danger' | 'warn' | 'accent' | 'neutral';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
-function ValueCell({ parsed, raw }: { parsed: string | null; raw: string }) {
+function getReasonTone(reason: string): BadgeTone {
+  if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'danger';
+  if (reason === 'MISSING_IN_B' || reason === 'ORPHAN_IN_B') return 'warn';
+  if (reason === 'VALUE_MISMATCH' || reason === 'DUPLICATE_IN_B' || reason === 'UNPARSEABLE_VALUE') {
+    return 'accent';
+  }
+  return 'neutral';
+}
+
+function StatusIcon({ tone }: { tone: BadgeTone }) {
+  if (tone === 'danger') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d="M8 2.25 14 13H2L8 2.25Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path d="M8 6.25v3.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="8" cy="11.25" r="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (tone === 'warn') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.75" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M8 5.25v3.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="8" cy="11" r="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (tone === 'accent') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d="M3 5.5h10M3 10.5h10"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3.25" width="11" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M2.5 6.5h11" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+function CopyIdButton({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async (e: MouseEvent<HTMLButtonElement>) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      setCopied(false);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="copy-btn"
+      aria-label={`Copy ${value}`}
+      title={`Copy ${value}`}
+      onClick={handleCopy}
+    >
+      <span className="icon-swap" data-copied={copied ? 'true' : 'false'}>
+        <svg className="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+          <path
+            d="M10.5 3.5A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </svg>
+        <svg className="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="m3.5 8.5 3 3 6-6.5"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </span>
+    </button>
+  );
+}
+
+function ValueCell({
+  label,
+  parsed,
+  raw,
+}: {
+  label: string;
+  parsed: string | null;
+  raw: string;
+}) {
   const showRaw = Boolean(raw) && raw !== parsed && !(parsed === null && raw === '-');
   return (
-    <td style={tdStyle}>
-      {parsed ?? '-'}
-      {showRaw && <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {raw}</div>}
+    <td className="num tabular" data-label={label}>
+      <div>
+        <div className="val-parsed mono">{parsed ?? '-'}</div>
+        {showRaw && <div className="val-raw mono">raw: {raw}</div>}
+      </div>
     </td>
   );
 }
@@ -39,16 +151,24 @@ export default function DisagreementsPage() {
   const [selectedOrg, setSelectedOrg] = useState<string>('');
   const [selectedReason, setSelectedReason] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<string>('value_desc');
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [rows, setRows] = useState<Disagreement[]>([]);
+  const [hasLoadedRows, setHasLoadedRows] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [activeRow, setActiveRow] = useState<Disagreement | null>(null);
+  const [renderBatch, setRenderBatch] = useState<number>(0);
+  const [reloadKey, setReloadKey] = useState<number>(0);
+
+  const closeBtnRef = useRef<HTMLButtonElement | null>(null);
+  const lastRowTriggerRef = useRef<HTMLTableRowElement | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
 
     fetch(`${API_BASE}/orgs/`, { signal: controller.signal })
       .then((res) => {
-        if (!res.ok) throw new Error(`API error (${res.status}) loading orgs from ${API_BASE}`);
+        if (!res.ok) throw new Error(`API error (${res.status}) loading orgs`);
         return res.json();
       })
       .then((data) => {
@@ -72,13 +192,14 @@ export default function DisagreementsPage() {
       });
 
     return () => controller.abort();
-  }, []);
+  }, [reloadKey]);
 
   useEffect(() => {
     if (!selectedOrg) return;
     const controller = new AbortController();
     setLoading(true);
     setError(null);
+    setActiveRow(null);
 
     const params = new URLSearchParams({ org: selectedOrg });
     if (selectedReason) params.set('reason', selectedReason);
@@ -91,6 +212,8 @@ export default function DisagreementsPage() {
       })
       .then((data) => {
         setRows(data.disagreements || []);
+        setHasLoadedRows(true);
+        setRenderBatch((n) => n + 1);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -105,53 +228,133 @@ export default function DisagreementsPage() {
       });
 
     return () => controller.abort();
-  }, [selectedOrg, selectedReason, sortOrder]);
+  }, [selectedOrg, selectedReason, sortOrder, reloadKey]);
+
+  useEffect(() => {
+    if (!activeRow) return;
+    closeBtnRef.current?.focus();
+
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveRow(null);
+        lastRowTriggerRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeRow]);
+
+  const visibleRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.record_id.toLowerCase().includes(q) ||
+        r.location_id.toLowerCase().includes(q) ||
+        r.location_name.toLowerCase().includes(q) ||
+        r.detail.toLowerCase().includes(q),
+    );
+  }, [rows, searchQuery]);
+
+  const selectedOrgIndex = Math.max(0, orgs.indexOf(selectedOrg));
+  const hasFilters = Boolean(selectedReason || searchQuery.trim() || sortOrder !== 'value_desc');
+
+  const openInspector = (row: Disagreement, element: HTMLTableRowElement) => {
+    lastRowTriggerRef.current = element;
+    setActiveRow(row);
+  };
+
+  const closeInspector = () => {
+    setActiveRow(null);
+    lastRowTriggerRef.current?.focus();
+  };
+
+  const handleRowKeyDown = (e: KeyboardEvent<HTMLTableRowElement>, row: Disagreement) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      openInspector(row, e.currentTarget);
+    }
+  };
 
   return (
-    <main>
-      <h1 style={{ marginBottom: '4px' }}>System A and System B Disagreements</h1>
-      <p style={{ color: '#4b5563', marginTop: 0 }}>
-        Scoped to one org at a time. Switching orgs queries only that org&apos;s records.
-      </p>
+    <main className="page-shell">
+      <header className="header-bar">
+        <div>
+          <h1 className="page-title">System A and System B Disagreements</h1>
+          <p className="page-subtitle">
+            Reconciles imported event totals, dates, and references inside a single org boundary.
+          </p>
+        </div>
 
-      <div
-        style={{
-          display: 'flex',
-          gap: '16px',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          margin: '16px 0',
-          padding: '12px',
-          border: '1px solid #d1d5db',
-          background: '#f9fafb',
-        }}
-      >
-        <label>
-          <strong>Org: </strong>
-          <select
-            value={selectedOrg}
-            disabled={orgs.length === 0}
-            onChange={(e) => setSelectedOrg(e.target.value)}
-            style={{ padding: '4px 8px' }}
-          >
+        <div className="org-switcher-wrap">
+          <div className="segmented-control" role="group" aria-label="Select organization">
+            {orgs.length > 0 && (
+              <span
+                className="segmented-indicator"
+                aria-hidden="true"
+                style={{
+                  width: `calc((100% - 8px) / ${orgs.length})`,
+                  transform: `translateX(${selectedOrgIndex * 100}%)`,
+                }}
+              />
+            )}
             {orgs.length === 0 ? (
-              <option value="">Loading...</option>
+              <button type="button" className="segmented-btn" disabled>
+                Loading...
+              </button>
             ) : (
               orgs.map((org) => (
-                <option key={org} value={org}>
+                <button
+                  key={org}
+                  type="button"
+                  className="segmented-btn"
+                  aria-pressed={selectedOrg === org}
+                  onClick={() => setSelectedOrg(org)}
+                >
                   {org}
-                </option>
+                </button>
               ))
             )}
-          </select>
-        </label>
+          </div>
+          <span className="scope-hint">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+            API scoped to {selectedOrg || 'selected org'} only
+          </span>
+        </div>
+      </header>
 
-        <label>
-          <strong>Filter by Reason: </strong>
+      <section className="controls-card" aria-label="Filter and sort controls">
+        <div className="field-group">
+          <label className="field-label" htmlFor="search-input">
+            Search record or location
+          </label>
+          <input
+            id="search-input"
+            type="search"
+            className="control-input"
+            placeholder="REC-1064, LOC-101..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="field-group">
+          <label className="field-label" htmlFor="reason-select">
+            Reason
+          </label>
           <select
+            id="reason-select"
+            className="control-select"
             value={selectedReason}
             onChange={(e) => setSelectedReason(e.target.value)}
-            style={{ padding: '4px 8px' }}
           >
             <option value="">All reasons</option>
             {reasons.map((r) => (
@@ -160,95 +363,219 @@ export default function DisagreementsPage() {
               </option>
             ))}
           </select>
-        </label>
+        </div>
 
-        <label>
-          <strong>Sort: </strong>
+        <div className="field-group">
+          <label className="field-label" htmlFor="sort-select">
+            Sort
+          </label>
           <select
+            id="sort-select"
+            className="control-select"
             value={sortOrder}
             onChange={(e) => setSortOrder(e.target.value)}
-            style={{ padding: '4px 8px' }}
           >
             <option value="value_desc">Highest value first</option>
             <option value="value_asc">Lowest value first</option>
             <option value="">Record ID (A-Z)</option>
           </select>
-        </label>
+        </div>
 
-        <span style={{ marginLeft: 'auto', fontSize: '14px', color: '#374151' }}>
-          Showing <strong>{rows.length}</strong> disagreement{rows.length === 1 ? '' : 's'}
-        </span>
-      </div>
+        <div className="controls-meta">
+          <span className="count-pill tabular" role="status" aria-live="polite">
+            <strong>{visibleRows.length}</strong>
+            <span>disagreement{visibleRows.length === 1 ? '' : 's'}</span>
+          </span>
+          {hasFilters && (
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setSelectedReason('');
+                setSearchQuery('');
+                setSortOrder('value_desc');
+              }}
+            >
+              Reset
+            </button>
+          )}
+        </div>
+      </section>
 
       {error && (
-        <div
-          style={{
-            padding: '12px',
-            marginBottom: '16px',
-            border: '1px solid #ef4444',
-            background: '#fef2f2',
-            color: '#991b1b',
-          }}
-        >
-          {error}
+        <div className="error-banner" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="btn-ghost"
+            onClick={() => setReloadKey((k) => k + 1)}
+          >
+            Retry
+          </button>
         </div>
       )}
 
-      {loading ? (
-        <p>Loading disagreements...</p>
-      ) : rows.length === 0 ? (
-        <p>No disagreements match the selected filters for {selectedOrg || 'this org'}.</p>
-      ) : (
-        <table
-          style={{
-            width: '100%',
-            borderCollapse: 'collapse',
-            fontSize: '14px',
+      <section className="table-card" aria-label="Disagreements table">
+        {!hasLoadedRows && loading ? (
+          <div style={{ padding: '20px' }} aria-label="Loading disagreements">
+            {[0, 1, 2, 3, 4].map((idx) => (
+              <div
+                key={idx}
+                className="skeleton-line"
+                style={{ width: `${92 - idx * 7}%`, marginBottom: idx === 4 ? 0 : '14px' }}
+              />
+            ))}
+          </div>
+        ) : visibleRows.length === 0 ? (
+          <div className="empty-state">
+            <p style={{ margin: '0 0 12px', fontWeight: 500 }}>
+              No disagreements match these filters for {selectedOrg || 'this org'}.
+            </p>
+            {hasFilters && (
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => {
+                  setSelectedReason('');
+                  setSearchQuery('');
+                  setSortOrder('value_desc');
+                }}
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="table-scroll" data-refreshing={loading ? 'true' : 'false'}>
+            <table className="ledger-table">
+              <thead>
+                <tr>
+                  <th>Record ID</th>
+                  <th>Location</th>
+                  <th>Reason</th>
+                  <th className="num">System A Value</th>
+                  <th className="num">System B Value</th>
+                  <th>Detail</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row, idx) => {
+                  const tone = getReasonTone(row.reason);
+                  const rowKey = `${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`;
+                  const isSelected =
+                    activeRow?.record_id === row.record_id && activeRow?.reason === row.reason;
+                  const delay = Math.min(idx, 6) * 28;
+                  return (
+                    <tr
+                      key={`${renderBatch}-${rowKey}`}
+                      className="ledger-row row-stagger"
+                      style={{ '--row-delay': `${delay}ms` } as CSSProperties}
+                      tabIndex={0}
+                      data-selected={isSelected ? 'true' : 'false'}
+                      onClick={(e) => openInspector(row, e.currentTarget)}
+                      onKeyDown={(e) => handleRowKeyDown(e, row)}
+                    >
+                      <td data-label="Record ID">
+                        <div className="record-cell">
+                          <code className="record-id">{row.record_id}</code>
+                          <CopyIdButton value={row.record_id} />
+                        </div>
+                      </td>
+                      <td data-label="Location">
+                        <div className="location-primary">{row.location_name}</div>
+                        <div className="location-id mono">{row.location_id}</div>
+                      </td>
+                      <td data-label="Reason">
+                        <span className="reason-badge" data-tone={tone}>
+                          <StatusIcon tone={tone} />
+                          <span>{row.reason_label}</span>
+                        </span>
+                      </td>
+                      <ValueCell label="System A Value" parsed={row.system_a_value} raw={row.system_a_raw} />
+                      <ValueCell label="System B Value" parsed={row.system_b_value} raw={row.system_b_raw} />
+                      <td data-label="Detail">
+                        <div className="detail-text">{row.detail}</div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {activeRow && (
+        <div
+          className="drawer-backdrop"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeInspector();
           }}
         >
-          <thead>
-            <tr style={{ background: '#f3f4f6', textAlign: 'left' }}>
-              <th style={thStyle}>Record ID</th>
-              <th style={thStyle}>Location</th>
-              <th style={thStyle}>Reason</th>
-              <th style={thStyle}>System A Value</th>
-              <th style={thStyle}>System B Value</th>
-              <th style={thStyle}>Detail</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr
-                key={`${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`}
-                style={{ borderTop: '1px solid #e5e7eb' }}
+          <aside
+            className="drawer-panel"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="drawer-title"
+          >
+            <div className="drawer-header">
+              <div>
+                <div className="mono" style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {selectedOrg} · {activeRow.location_id}
+                </div>
+                <h2 id="drawer-title" style={{ margin: '4px 0 8px', fontSize: '20px' }}>
+                  {activeRow.record_id}
+                </h2>
+                <span className="reason-badge" data-tone={getReasonTone(activeRow.reason)}>
+                  <StatusIcon tone={getReasonTone(activeRow.reason)} />
+                  <span>{activeRow.reason_label}</span>
+                </span>
+              </div>
+              <button
+                ref={closeBtnRef}
+                type="button"
+                className="btn-ghost"
+                onClick={closeInspector}
               >
-                <td style={tdStyle}>
-                  <code>{row.record_id}</code>
-                </td>
-                <td style={tdStyle}>
-                  {row.location_name} <span style={{ color: '#6b7280' }}>({row.location_id})</span>
-                </td>
-                <td style={tdStyle}>
-                  <strong>{row.reason_label}</strong>
-                </td>
-                <ValueCell parsed={row.system_a_value} raw={row.system_a_raw} />
-                <ValueCell parsed={row.system_b_value} raw={row.system_b_raw} />
-                <td style={tdStyle}>{row.detail}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                Close
+              </button>
+            </div>
+
+            <p style={{ margin: 0, color: 'var(--text-secondary)', textWrap: 'pretty' }}>
+              {activeRow.detail}
+            </p>
+
+            <div className="drawer-grid">
+              <div className="compare-box">
+                <div className="compare-box-label">System A</div>
+                <div className="val-parsed mono tabular" style={{ fontSize: '18px' }}>
+                  {activeRow.system_a_value ?? '-'}
+                </div>
+                <div className="val-raw mono">raw: {activeRow.system_a_raw || '(none)'}</div>
+              </div>
+              <div className="compare-box">
+                <div className="compare-box-label">System B</div>
+                <div className="val-parsed mono tabular" style={{ fontSize: '18px' }}>
+                  {activeRow.system_b_value ?? '-'}
+                </div>
+                <div className="val-raw mono">raw: {activeRow.system_b_raw || '(none)'}</div>
+              </div>
+            </div>
+
+            <div className="compare-box">
+              <div className="compare-box-label">Location and Tenant Scope</div>
+              <div style={{ fontWeight: 500 }}>
+                {activeRow.location_name} ({activeRow.location_id})
+              </div>
+              <div style={{ marginTop: '4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                {activeRow.reason === 'TENANT_MISMATCH'
+                  ? 'Foreign org identifiers and values are redacted on the server before this response leaves Django.'
+                  : `Scoped strictly to ${selectedOrg}.`}
+              </div>
+            </div>
+          </aside>
+        </div>
       )}
     </main>
   );
 }
-
-const thStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  borderBottom: '2px solid #d1d5db',
-};
-
-const tdStyle: React.CSSProperties = {
-  padding: '10px 12px',
-  verticalAlign: 'top',
-};
