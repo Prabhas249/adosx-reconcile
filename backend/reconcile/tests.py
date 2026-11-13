@@ -144,8 +144,61 @@ class ReconciliationTests(TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['reason'], 'DATE_MISMATCH')
 
+    def test_catches_location_mismatch_within_same_org(self):
+        self._create_a(record_id='REC-1080', location=self.loc_a1, total='25000.00')
+        self._create_b(entry_id='ENT/2026/4080', raw_ref='REC-1080', location=self.loc_a2, raw_value='25000.00')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'LOCATION_MISMATCH')
+        self.assertIn('LOC-101', rows[0]['detail'])
+        self.assertIn('LOC-102', rows[0]['detail'])
+
+    def test_split_payment_still_flags_location_mismatch(self):
+        self._create_a(record_id='REC-1056', location=self.loc_a1, total='1000.00')
+        self._create_b(entry_id='ENT/2026/4056', raw_ref='REC-1056', location=self.loc_a1, raw_value='400.00')
+        self._create_b(
+            entry_id='ENT/2026/4904',
+            raw_ref='REC-1056',
+            location=self.loc_a2,
+            raw_value='600.00',
+            label='Entry part 2 of 2',
+        )
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'LOCATION_MISMATCH')
+
+    def test_voided_record_with_multiple_entries_flags_voided_not_duplicate(self):
+        self._create_a(record_id='REC-1020', total='1000.00', state='VOIDED')
+        self._create_b(entry_id='ENT/2026/4020', raw_ref='REC-1020', raw_value='500.00')
+        self._create_b(entry_id='ENT/2026/4905', raw_ref='REC-1020', raw_value='500.00')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'VOIDED_IN_A')
+
+    def test_unmapped_location_does_not_trigger_false_tenant_mismatch(self):
+        self._create_a(record_id='REC-1090', location=self.loc_a1, total='5000.00')
+        SystemBEntry.objects.create(
+            entry_id='ENT/2026/4090',
+            raw_record_ref='REC-1090',
+            normalized_record_ref='REC-1090',
+            location=None,
+            location_id_raw='LOC-UNKNOWN',
+            recorded_on=date(2026, 3, 1),
+            raw_recorded_on='2026-03-01',
+            value=Decimal('5000.00'),
+            raw_value='5000.00',
+            value_parse_error=False,
+        )
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'MISSING_IN_B')
+
+    def test_parse_decimal_safe_handles_excess_precision(self):
+        val, err = parse_decimal_safe('123456789012345678901234567890.123')
+        self.assertIsNone(val)
+        self.assertTrue(err)
+
     def test_cross_tenant_mismatch_does_not_leak_other_org(self):
-        # System A says ORG-A (LOC-102), System B says ORG-B (LOC-201)
         self._create_a(record_id='REC-1077', location=self.loc_a2, total='83361.40')
         self._create_b(entry_id='ENT/2026/4077', raw_ref='REC-1077', location=self.loc_b1, raw_value='83361.40')
 
@@ -162,19 +215,49 @@ class ReconciliationTests(TestCase):
         self.assertNotIn('LOC-102', str(org_b_rows[0]))
         self.assertNotIn('ORG-A', str(org_b_rows[0]))
 
-    def test_api_requires_org_and_imports_full_csv_dataset(self):
+    def test_sort_handles_null_and_mixed_values(self):
+        self._create_a(record_id='REC-0001', total=None)
+        self._create_b(entry_id='ENT/2026/0001', raw_ref='REC-0001', raw_value='')
+        self._create_a(record_id='REC-0002', total='50.00')
+        self._create_a(record_id='REC-0003', total='250.00')
+
+        asc = find_disagreements('ORG-A', sort_order='value_asc')
+        desc = find_disagreements('ORG-A', sort_order='value_desc')
+        self.assertEqual([r['record_id'] for r in asc], ['REC-0001', 'REC-0002', 'REC-0003'])
+        self.assertEqual([r['record_id'] for r in desc], ['REC-0003', 'REC-0002', 'REC-0001'])
+
+    def test_api_endpoints_validation_filtering_and_full_csv_import(self):
         data_dir = Path(settings.BASE_DIR).parent / 'data'
         counts = import_csv_directory(data_dir, replace=True)
         self.assertEqual(counts, {'locations': 5, 'system_a': 120, 'system_b': 121})
 
         client = APIClient()
-        missing_org = client.get('/api/disagreements/')
-        self.assertEqual(missing_org.status_code, 400)
+
+        orgs_resp = client.get('/api/orgs/')
+        self.assertEqual(orgs_resp.status_code, 200)
+        self.assertEqual(orgs_resp.json()['orgs'], ['ORG-A', 'ORG-B'])
+
+        self.assertEqual(client.get('/api/disagreements/').status_code, 400)
+        self.assertEqual(client.get('/api/disagreements/?org=UNKNOWN').status_code, 400)
+        self.assertEqual(client.get('/api/disagreements/?org=ORG-A&reason=NOPE').status_code, 400)
+        self.assertEqual(client.get('/api/disagreements/?org=ORG-A&sort=invalid').status_code, 400)
 
         resp_a = client.get('/api/disagreements/?org=ORG-A&sort=value_desc')
         self.assertEqual(resp_a.status_code, 200)
-        self.assertEqual(resp_a.json()['count'], 7)
+        payload_a = resp_a.json()
+        self.assertEqual(payload_a['count'], 7)
+        self.assertNotIn('LOC-201', str(payload_a))
+        self.assertNotIn('ORG-B', str(payload_a))
+        sort_vals_a = [r['sort_value'] for r in payload_a['disagreements']]
+        self.assertEqual(sort_vals_a, sorted(sort_vals_a, reverse=True))
+
+        filtered = client.get('/api/disagreements/?org=ORG-A&reason=VALUE_MISMATCH')
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([r['record_id'] for r in filtered.json()['disagreements']], ['REC-1027', 'REC-1064', 'REC-1088'])
 
         resp_b = client.get('/api/disagreements/?org=ORG-B')
         self.assertEqual(resp_b.status_code, 200)
-        self.assertEqual(resp_b.json()['count'], 6)
+        payload_b = resp_b.json()
+        self.assertEqual(payload_b['count'], 6)
+        self.assertNotIn('LOC-102', str(payload_b))
+        self.assertNotIn('ORG-A', str(payload_b))

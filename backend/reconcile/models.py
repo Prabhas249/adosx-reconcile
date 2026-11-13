@@ -2,8 +2,6 @@ from django.db import models
 
 
 class Location(models.Model):
-    """Maps each dealership location to exactly one tenant (org_id)."""
-
     location_id = models.CharField(max_length=32, unique=True)
     org_id = models.CharField(max_length=32, db_index=True)
     location_name = models.CharField(max_length=120)
@@ -16,12 +14,6 @@ class Location(models.Model):
 
 
 class SystemARecord(models.Model):
-    """
-    One event row from System A.
-    Keeps raw string copies alongside parsed Decimal/Date fields so dirty
-    or partially blank CSV rows survive import without silent drops.
-    """
-
     record_id = models.CharField(max_length=64, unique=True)
     raw_record_id = models.CharField(max_length=64)
     location = models.ForeignKey(
@@ -59,15 +51,9 @@ class SystemARecord(models.Model):
 
 
 class SystemBEntry(models.Model):
-    """
-    One entry row from System B.
-    record_ref is intentionally NOT a ForeignKey to SystemARecord because
-    dirty exports include orphan refs (e.g. REC-1999) and messy ref formats
-    that must still survive import.
-    """
-
     entry_id = models.CharField(max_length=64, unique=True)
     raw_record_ref = models.CharField(max_length=64)
+    # Indexed CharField instead of ForeignKey so orphan refs (such as REC-1999) import cleanly.
     normalized_record_ref = models.CharField(max_length=64, db_index=True)
 
     location = models.ForeignKey(

@@ -8,7 +8,6 @@ from reconcile.models import Location
 
 @api_view(['GET'])
 def list_orgs(request):
-    """Return available tenants (orgs) and supported disagreement reason filters."""
     orgs = list(Location.objects.values_list('org_id', flat=True).distinct().order_by('org_id'))
     return Response({
         'orgs': orgs,
@@ -21,10 +20,6 @@ def list_orgs(request):
 
 @api_view(['GET'])
 def list_disagreements(request):
-    """
-    Return disagreements strictly scoped to the requested tenant (?org=ORG-A).
-    Refuses requests without a valid org so cross-tenant data can never leak.
-    """
     org_id = request.query_params.get('org', '').strip()
     if not org_id:
         return Response(

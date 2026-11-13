@@ -23,10 +23,21 @@ interface ReasonOption {
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
+function ValueCell({ parsed, raw }: { parsed: string | null; raw: string }) {
+  return (
+    <td style={tdStyle}>
+      {parsed ?? '-'}
+      {raw && raw !== parsed && (
+        <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {raw}</div>
+      )}
+    </td>
+  );
+}
+
 export default function DisagreementsPage() {
-  const [orgs, setOrgs] = useState<string[]>(['ORG-A', 'ORG-B']);
+  const [orgs, setOrgs] = useState<string[]>([]);
   const [reasons, setReasons] = useState<ReasonOption[]>([]);
-  const [selectedOrg, setSelectedOrg] = useState<string>('ORG-A');
+  const [selectedOrg, setSelectedOrg] = useState<string>('');
   const [selectedReason, setSelectedReason] = useState<string>('');
   const [sortOrder, setSortOrder] = useState<string>('value_desc');
   const [rows, setRows] = useState<Disagreement[]>([]);
@@ -34,27 +45,39 @@ export default function DisagreementsPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/orgs/`)
+    const controller = new AbortController();
+
+    fetch(`${API_BASE}/orgs/`, { signal: controller.signal })
       .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load orgs (${res.status})`);
+        if (!res.ok) throw new Error(`API error (${res.status}) loading orgs from ${API_BASE}`);
         return res.json();
       })
       .then((data) => {
-        if (Array.isArray(data.orgs) && data.orgs.length > 0) {
-          setOrgs(data.orgs);
-          setSelectedOrg((prev) => (data.orgs.includes(prev) ? prev : data.orgs[0]));
+        const fetchedOrgs: string[] = Array.isArray(data.orgs) ? data.orgs : [];
+        setOrgs(fetchedOrgs);
+        if (fetchedOrgs.length > 0) {
+          setSelectedOrg((prev) => (fetchedOrgs.includes(prev) ? prev : fetchedOrgs[0]));
+        } else {
+          setLoading(false);
         }
         if (Array.isArray(data.reasons)) {
           setReasons(data.reasons);
         }
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Unable to connect to Django API');
+        if (controller.signal.aborted) return;
+        setLoading(false);
+        setError(
+          err instanceof Error ? `${err.message} (${API_BASE})` : `Unable to reach ${API_BASE}`,
+        );
       });
+
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
     if (!selectedOrg) return;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
@@ -62,7 +85,7 @@ export default function DisagreementsPage() {
     if (selectedReason) params.set('reason', selectedReason);
     if (sortOrder) params.set('sort', sortOrder);
 
-    fetch(`${API_BASE}/disagreements/?${params.toString()}`)
+    fetch(`${API_BASE}/disagreements/?${params.toString()}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`API error (${res.status})`);
         return res.json();
@@ -71,18 +94,25 @@ export default function DisagreementsPage() {
         setRows(data.disagreements || []);
       })
       .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : 'Failed to fetch disagreements');
+        if (controller.signal.aborted) return;
+        setError(
+          err instanceof Error ? `${err.message} (${API_BASE})` : `Unable to reach ${API_BASE}`,
+        );
       })
       .finally(() => {
-        setLoading(false);
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
       });
+
+    return () => controller.abort();
   }, [selectedOrg, selectedReason, sortOrder]);
 
   return (
     <main>
-      <h1 style={{ marginBottom: '4px' }}>System A vs System B Disagreements</h1>
+      <h1 style={{ marginBottom: '4px' }}>System A and System B Disagreements</h1>
       <p style={{ color: '#4b5563', marginTop: 0 }}>
-        Strictly scoped per tenant (org). Switching tenants queries only that org&apos;s records.
+        Scoped to one org at a time. Switching orgs queries only that org&apos;s records.
       </p>
 
       <div
@@ -98,17 +128,22 @@ export default function DisagreementsPage() {
         }}
       >
         <label>
-          <strong>Tenant (Org): </strong>
+          <strong>Org: </strong>
           <select
             value={selectedOrg}
+            disabled={orgs.length === 0}
             onChange={(e) => setSelectedOrg(e.target.value)}
             style={{ padding: '4px 8px' }}
           >
-            {orgs.map((org) => (
-              <option key={org} value={org}>
-                {org}
-              </option>
-            ))}
+            {orgs.length === 0 ? (
+              <option value="">Loading...</option>
+            ) : (
+              orgs.map((org) => (
+                <option key={org} value={org}>
+                  {org}
+                </option>
+              ))
+            )}
           </select>
         </label>
 
@@ -129,7 +164,7 @@ export default function DisagreementsPage() {
         </label>
 
         <label>
-          <strong>Sort by Value: </strong>
+          <strong>Sort: </strong>
           <select
             value={sortOrder}
             onChange={(e) => setSortOrder(e.target.value)}
@@ -156,14 +191,14 @@ export default function DisagreementsPage() {
             color: '#991b1b',
           }}
         >
-          {error}. Make sure the Django server is running on <code>127.0.0.1:8000</code>.
+          {error}
         </div>
       )}
 
       {loading ? (
         <p>Loading disagreements...</p>
       ) : rows.length === 0 ? (
-        <p>No disagreements match the selected filters for {selectedOrg}.</p>
+        <p>No disagreements match the selected filters for {selectedOrg || 'this org'}.</p>
       ) : (
         <table
           style={{
@@ -183,8 +218,11 @@ export default function DisagreementsPage() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, idx) => (
-              <tr key={`${row.record_id}-${row.reason}-${idx}`} style={{ borderTop: '1px solid #e5e7eb' }}>
+            {rows.map((row) => (
+              <tr
+                key={`${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`}
+                style={{ borderTop: '1px solid #e5e7eb' }}
+              >
                 <td style={tdStyle}>
                   <code>{row.record_id}</code>
                 </td>
@@ -194,18 +232,8 @@ export default function DisagreementsPage() {
                 <td style={tdStyle}>
                   <strong>{row.reason_label}</strong>
                 </td>
-                <td style={tdStyle}>
-                  {row.system_a_value ?? '—'}
-                  {row.system_a_raw && row.system_a_raw !== row.system_a_value && (
-                    <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {row.system_a_raw}</div>
-                  )}
-                </td>
-                <td style={tdStyle}>
-                  {row.system_b_value ?? '—'}
-                  {row.system_b_raw && row.system_b_raw !== row.system_b_value && (
-                    <div style={{ fontSize: '12px', color: '#6b7280' }}>raw: {row.system_b_raw}</div>
-                  )}
-                </td>
+                <ValueCell parsed={row.system_a_value} raw={row.system_a_raw} />
+                <ValueCell parsed={row.system_b_value} raw={row.system_b_raw} />
                 <td style={tdStyle}>{row.detail}</td>
               </tr>
             ))}

@@ -12,18 +12,16 @@ REF_PATTERN = re.compile(r'^(?:rec\s*-?\s*)?(\d+)$', re.IGNORECASE)
 
 
 def normalize_record_ref(raw: str | None) -> str:
-    """Normalize references written as 'rec1034', ' REC - 1070 ', or '1112' to 'REC-XXXX'."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return ''
     match = REF_PATTERN.match(cleaned)
     if match:
-        return f'REC-{int(match.group(1))}'
+        return f'REC-{match.group(1)}'
     return cleaned.upper()
 
 
 def parse_decimal_safe(raw: str | None) -> tuple[Decimal | None, bool]:
-    """Parse monetary strings including commas ('1,25,400.00') without raising on blanks."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return None, True
@@ -31,17 +29,14 @@ def parse_decimal_safe(raw: str | None) -> tuple[Decimal | None, bool]:
     normalized = cleaned.replace(',', '').replace('₹', '').strip()
     try:
         amount = Decimal(normalized)
+        if not amount.is_finite():
+            return None, True
+        return amount.quantize(Decimal('0.01')), False
     except InvalidOperation:
         return None, True
 
-    if not amount.is_finite():
-        return None, True
-
-    return amount.quantize(Decimal('0.01')), False
-
 
 def parse_date_safe(raw: str | None) -> date | None:
-    """Parse common ISO and slash date strings, returning None on blanks or invalid dates."""
     cleaned = (raw or '').strip()
     if not cleaned:
         return None
@@ -55,7 +50,6 @@ def parse_date_safe(raw: str | None) -> date | None:
 
 @transaction.atomic
 def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]:
-    """Load all three CSV files atomically, preserving raw text alongside parsed fields."""
     if replace:
         SystemBEntry.objects.all().delete()
         SystemARecord.objects.all().delete()
@@ -85,14 +79,14 @@ def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]
             adj_val, _ = parse_decimal_safe(row.get('adjustment'))
             total_val, total_err = parse_decimal_safe(row.get('total_value'))
 
-            SystemARecord.objects.update_or_create(
+            _, created = SystemARecord.objects.update_or_create(
                 record_id=norm_id,
                 defaults={
                     'raw_record_id': raw_id,
                     'location': locations_by_id.get(loc_raw),
                     'location_id_raw': loc_raw,
                     'event_date': parse_date_safe(row.get('event_date')),
-                    'raw_event_date': (row.get('event_date') or '').strip(),
+                    'raw_event_date': row.get('event_date') or '',
                     'category_code': (row.get('category_code') or '').strip(),
                     'actor_id': (row.get('actor_id') or '').strip(),
                     'base_value': base_val,
@@ -105,7 +99,8 @@ def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]
                     'state': (row.get('state') or 'CONFIRMED').strip().upper(),
                 },
             )
-            a_count += 1
+            if created:
+                a_count += 1
 
     b_count = 0
     with (data_dir / 'system_b.csv').open('r', encoding='utf-8-sig', newline='') as f:
@@ -117,7 +112,7 @@ def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]
 
             val, val_err = parse_decimal_safe(row.get('value'))
 
-            SystemBEntry.objects.update_or_create(
+            _, created = SystemBEntry.objects.update_or_create(
                 entry_id=entry_id,
                 defaults={
                     'raw_record_ref': raw_ref,
@@ -125,14 +120,15 @@ def import_csv_directory(data_dir: Path, replace: bool = True) -> dict[str, int]
                     'location': locations_by_id.get(loc_raw),
                     'location_id_raw': loc_raw,
                     'recorded_on': parse_date_safe(row.get('recorded_on')),
-                    'raw_recorded_on': (row.get('recorded_on') or '').strip(),
+                    'raw_recorded_on': row.get('recorded_on') or '',
                     'value': val,
                     'raw_value': row.get('value') or '',
                     'value_parse_error': val_err,
                     'label': (row.get('label') or '').strip(),
                 },
             )
-            b_count += 1
+            if created:
+                b_count += 1
 
     return {
         'locations': len(locations_by_id),
