@@ -14,7 +14,13 @@ else
 fi
 
 echo "2. Django tests"
-"$ROOT/backend/.venv/bin/python" "$ROOT/backend/manage.py" test reconcile
+if [ -x "$ROOT/backend/.venv/bin/python" ]; then
+  "$ROOT/backend/.venv/bin/python" "$ROOT/backend/manage.py" test reconcile
+elif command -v python3 >/dev/null 2>&1; then
+  python3 "$ROOT/backend/manage.py" test reconcile
+else
+  python "$ROOT/backend/manage.py" test reconcile
+fi
 
 echo "3. TypeScript check"
 npx --prefix "$ROOT/frontend" tsc --noEmit
