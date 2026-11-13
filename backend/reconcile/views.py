@@ -1,3 +1,47 @@
-from django.shortcuts import render
+from rest_framework import status
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 
-# Create your views here.
+from reconcile.comparator import REASON_LABELS, find_disagreements
+from reconcile.models import Location
+
+
+@api_view(['GET'])
+def list_orgs(request):
+    """Return available tenants (orgs) and supported disagreement reason filters."""
+    orgs = list(Location.objects.values_list('org_id', flat=True).distinct().order_by('org_id'))
+    return Response({
+        'orgs': orgs,
+        'reasons': [
+            {'code': code, 'label': label}
+            for code, label in REASON_LABELS.items()
+        ],
+    })
+
+
+@api_view(['GET'])
+def list_disagreements(request):
+    """
+    Return disagreements strictly scoped to the requested tenant (?org=ORG-A).
+    Refuses requests without a valid org so cross-tenant data can never leak.
+    """
+    org_id = request.query_params.get('org', '').strip()
+    if not org_id:
+        return Response(
+            {'error': 'Missing required query parameter: org'},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    reason = request.query_params.get('reason', '').strip() or None
+    sort = request.query_params.get('sort', '').strip() or None
+
+    try:
+        rows = find_disagreements(org_id=org_id, reason_filter=reason, sort_order=sort)
+    except ValueError as exc:
+        return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    return Response({
+        'org_id': org_id,
+        'count': len(rows),
+        'disagreements': rows,
+    })
