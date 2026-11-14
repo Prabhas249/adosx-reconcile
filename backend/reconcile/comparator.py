@@ -312,7 +312,6 @@ def find_disagreements(
     missing_a_ids = [rec.record_id for rec in a_records if rec.record_id not in b_by_ref]
     orphan_b_refs = [ref for ref in b_by_ref if ref not in a_by_id]
 
-    # Membership checks only: never select org, location, or value fields from another tenant.
     other_org_b_refs = (
         set(
             SystemBEntry.objects.filter(normalized_record_ref__in=missing_a_ids, location__isnull=False)

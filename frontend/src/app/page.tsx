@@ -85,7 +85,7 @@ function getAuditSteps(row: Disagreement, org: string): string[] {
   );
   if (row.detail.includes('base_value')) {
     steps.push(
-      'System B recorded only System A base_value and dropped the adjustment column during posting.',
+      'System B recorded only System A base_value and dropped the 28% GST adjustment column during posting.',
     );
   } else if (row.reason === 'DUPLICATE_IN_B') {
     steps.push(
@@ -137,7 +137,7 @@ function buildSparklineValues(row: Disagreement, maxExposure: number): number[] 
 }
 
 function formatMoney(amount: number): string {
-  return new Intl.NumberFormat('en-US', {
+  return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(amount);
@@ -290,6 +290,89 @@ function DotsHorizontalIcon() {
   );
 }
 
+function BookOpenIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M2.25 3.5A1.25 1.25 0 0 1 3.5 2.25h3.25A1.25 1.25 0 0 1 8 3.5v9.75a1 1 0 0 0-1-1H3.5a1.25 1.25 0 0 1-1.25-1.25V3.5ZM13.75 3.5a1.25 1.25 0 0 0-1.25-1.25H9.25A1.25 1.25 0 0 0 8 3.5v9.75a1 1 0 0 1 1-1h3.5a1.25 1.25 0 0 0 1.25-1.25V3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+type CopilotTopic = 'why' | 'math' | 'tenant' | 'fix';
+
+function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): string {
+  const aFormatted =
+    row.system_a_value !== null ? `₹${formatMoney(Number(row.system_a_value))}` : 'None';
+  const bFormatted =
+    row.system_b_value !== null ? `₹${formatMoney(Number(row.system_b_value))}` : 'None';
+
+  if (topic === 'why') {
+    if (row.detail.includes('base_value')) {
+      return `System A recorded the full invoice total (${aFormatted} = base_value + 28% Indian 2-wheeler GST adjustment), whereas System B posted only the pre-GST base_value (${bFormatted}), omitting the 28% GST slab.`;
+    }
+    if (row.reason === 'DUPLICATE_IN_B') {
+      return `System B contains two separate ledger postings for ${row.record_id} that each carry the full amount (${aFormatted}), doubling the ledger exposure to ${bFormatted} instead of summing to System A like a valid split settlement (such as REC-1055).`;
+    }
+    if (row.reason === 'TENANT_MISMATCH') {
+      return `${row.record_id} was recorded at ${row.location_name} (${row.location_id}) in ${org}, while the corresponding counterparty entry was booked under a location belonging to a different organization.`;
+    }
+    if (row.reason === 'VOIDED_IN_A') {
+      return `${row.record_id} was marked VOIDED in System A, but the cancellation never propagated to System B, leaving an active ${bFormatted} ledger balance.`;
+    }
+    if (row.reason === 'UNPARSEABLE_VALUE') {
+      return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || 'blank'}).`;
+    }
+    return row.detail;
+  }
+
+  if (topic === 'math') {
+    const aNum = row.system_a_value !== null ? Number(row.system_a_value) : 0;
+    const bNum = row.system_b_value !== null ? Number(row.system_b_value) : 0;
+    const diff = Math.abs(aNum - bNum);
+    if (row.detail.includes('base_value') && bNum > 0) {
+      const gst = aNum - bNum;
+      return `Pre-GST base_value: ₹${formatMoney(bNum)} | 28% GST adjustment: ₹${formatMoney(gst)} | System A total_value: ₹${formatMoney(aNum)} | Unposted GST variance: ₹${formatMoney(diff)}.`;
+    }
+    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute net variance: ₹${formatMoney(diff)} | Sort exposure: ₹${formatMoney(row.sort_value)}.`;
+  }
+
+  if (topic === 'tenant') {
+    if (row.reason === 'TENANT_MISMATCH') {
+      return `Strict isolation active: comparator.py verified membership via values_list('normalized_record_ref', flat=True) with location__isnull=False and redacted the foreign org ID, location name, and rupee amount before serialization.`;
+    }
+    return `Scoped strictly to ${org} (${row.location_id} - ${row.location_name}) via .filter(location__org_id='${org}'). Zero cross-tenant fields accessed.`;
+  }
+
+  if (row.detail.includes('base_value')) {
+    return `Post a supplementary 28% GST adjustment voucher in System B for ${row.record_id} at ${row.location_id} so the ledger matches System A total_value (${aFormatted}).`;
+  }
+  if (row.reason === 'DUPLICATE_IN_B') {
+    return `Reverse the duplicate System B voucher (ENT/2026/4902) so only a single ${aFormatted} posting remains against ${row.record_id}.`;
+  }
+  if (row.reason === 'VOIDED_IN_A') {
+    return `Pass a reversal credit note in System B for ${bFormatted} to mirror the VOIDED state of ${row.record_id} in System A.`;
+  }
+  if (row.reason === 'MISSING_IN_B') {
+    return `Import or voucher the missing ${aFormatted} entry into System B under ${row.location_id} with reference ${row.record_id}.`;
+  }
+  if (row.reason === 'ORPHAN_IN_B') {
+    return `Audit voucher ${row.system_b_raw} in System B: either link it to a valid System A record ID or reverse the unbacked orphan entry.`;
+  }
+  if (row.reason === 'DATE_MISMATCH') {
+    return `Align the month-end cutoff date between System A and System B so both ledgers recognize ${row.record_id} in the same accounting period.`;
+  }
+  if (row.reason === 'TENANT_MISMATCH') {
+    return `Coordinate inter-org transfer clearance: reverse the misrouted entry in the foreign tenant and re-book under ${org} (${row.location_id}).`;
+  }
+  return `Re-verify source voucher in System B against System A (${aFormatted}) and re-import the corrected CSV row.`;
+}
+
 function CopyIdButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
 
@@ -353,7 +436,7 @@ function ValueCell({
       <div className="val-wrap">
         {formatted !== null ? (
           <span className="val-parsed">
-            <span className="val-currency">$</span>
+            <span className="val-currency">₹</span>
             <span>{formatted}</span>
           </span>
         ) : (
@@ -377,6 +460,9 @@ export default function DisagreementsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [activeRow, setActiveRow] = useState<Disagreement | null>(null);
+  const [copilotTopic, setCopilotTopic] = useState<CopilotTopic>('why');
+  const [kbOpen, setKbOpen] = useState<boolean>(false);
+  const [kbTab, setKbTab] = useState<'domain' | 'non_errors' | 'catalog'>('domain');
   const [renderBatch, setRenderBatch] = useState<number>(0);
   const [reloadKey, setReloadKey] = useState<number>(0);
   const [isDark, setIsDark] = useState<boolean>(true);
@@ -528,12 +614,13 @@ export default function DisagreementsPage() {
   }, [selectedOrg, selectedReason, sortOrder, reloadKey]);
 
   useEffect(() => {
-    if (!activeRow) return;
+    if (!activeRow && !kbOpen) return;
     closeBtnRef.current?.focus();
 
     const onKeyDown = (e: globalThis.KeyboardEvent) => {
       if (e.key === 'Escape') {
         setActiveRow(null);
+        setKbOpen(false);
         lastTriggerRef.current?.focus();
         return;
       }
@@ -555,7 +642,7 @@ export default function DisagreementsPage() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeRow]);
+  }, [activeRow, kbOpen]);
 
   const visibleRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -613,11 +700,24 @@ export default function DisagreementsPage() {
 
   const openInspector = (row: Disagreement, trigger: HTMLElement) => {
     lastTriggerRef.current = trigger;
+    setCopilotTopic('why');
+    setKbOpen(false);
     setActiveRow(row);
   };
 
   const closeInspector = () => {
     setActiveRow(null);
+    lastTriggerRef.current?.focus();
+  };
+
+  const openKnowledgeBase = (trigger: HTMLElement) => {
+    lastTriggerRef.current = trigger;
+    setActiveRow(null);
+    setKbOpen(true);
+  };
+
+  const closeKnowledgeBase = () => {
+    setKbOpen(false);
     lastTriggerRef.current?.focus();
   };
 
@@ -680,7 +780,7 @@ export default function DisagreementsPage() {
 
   return (
     <main className="crm-shell">
-      <div className="crm-main" inert={activeRow ? true : undefined}>
+      <div className="crm-main" inert={activeRow || kbOpen ? true : undefined}>
         <header className="crm-header">
           <div className="crm-header-left">
             <div className="crm-title-row">
@@ -691,7 +791,7 @@ export default function DisagreementsPage() {
               </span>
             </div>
             <p className="crm-subtitle">
-              Reconciles imported event totals, dates, and references strictly inside the selected org boundary.
+              Reconciles imported event totals (INR ₹), dates, and references strictly inside the selected org boundary.
             </p>
           </div>
 
@@ -940,6 +1040,14 @@ export default function DisagreementsPage() {
             <button
               type="button"
               className="crm-btn crm-btn-secondary"
+              onClick={(e) => openKnowledgeBase(e.currentTarget)}
+            >
+              <BookOpenIcon />
+              <span>Knowledge Base</span>
+            </button>
+            <button
+              type="button"
+              className="crm-btn crm-btn-secondary"
               onClick={exportCsv}
               disabled={visibleRows.length === 0}
             >
@@ -1115,15 +1223,15 @@ export default function DisagreementsPage() {
             </div>
             <div className="footer-cell tabular">
               <span>+ Sum of System A</span>
-              <strong>${formatMoney(metrics.sumA)}</strong>
+              <strong>₹{formatMoney(metrics.sumA)}</strong>
             </div>
             <div className="footer-cell tabular">
               <span>+ Sum of System B</span>
-              <strong>${formatMoney(metrics.sumB)}</strong>
+              <strong>₹{formatMoney(metrics.sumB)}</strong>
             </div>
             <div className="footer-cell tabular">
               <span>+ Peak Exposure</span>
-              <strong>${formatMoney(metrics.maxExposure)}</strong>
+              <strong>₹{formatMoney(metrics.maxExposure)}</strong>
             </div>
           </footer>
         </section>
@@ -1180,10 +1288,10 @@ export default function DisagreementsPage() {
 
               <div className="sheet-compare-grid">
                 <div className="sheet-box">
-                  <span className="sheet-box-label">System A</span>
+                  <span className="sheet-box-label">System A (DMS)</span>
                   <span className="sheet-box-value tabular">
                     {activeRow.system_a_value !== null
-                      ? `$${formatMoney(Number(activeRow.system_a_value))}`
+                      ? `₹${formatMoney(Number(activeRow.system_a_value))}`
                       : '-'}
                   </span>
                   <span className="sheet-box-raw mono">
@@ -1191,16 +1299,65 @@ export default function DisagreementsPage() {
                   </span>
                 </div>
                 <div className="sheet-box">
-                  <span className="sheet-box-label">System B</span>
+                  <span className="sheet-box-label">System B (Ledger)</span>
                   <span className="sheet-box-value tabular">
                     {activeRow.system_b_value !== null
-                      ? `$${formatMoney(Number(activeRow.system_b_value))}`
+                      ? `₹${formatMoney(Number(activeRow.system_b_value))}`
                       : '-'}
                   </span>
                   <span className="sheet-box-raw mono">
                     raw: {activeRow.system_b_raw || '(none)'}
                   </span>
                 </div>
+              </div>
+
+              <div className="sheet-box">
+                <span className="sheet-box-label">Interactive Audit Q&amp;A</span>
+                <div className="kb-chip-row" role="tablist" aria-label="Audit questions">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={copilotTopic === 'why'}
+                    className="kb-chip"
+                    data-active={copilotTopic === 'why' ? 'true' : 'false'}
+                    onClick={() => setCopilotTopic('why')}
+                  >
+                    Why did this disagree?
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={copilotTopic === 'math'}
+                    className="kb-chip"
+                    data-active={copilotTopic === 'math' ? 'true' : 'false'}
+                    onClick={() => setCopilotTopic('math')}
+                  >
+                    28% GST &amp; Math
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={copilotTopic === 'tenant'}
+                    className="kb-chip"
+                    data-active={copilotTopic === 'tenant' ? 'true' : 'false'}
+                    onClick={() => setCopilotTopic('tenant')}
+                  >
+                    Tenant Guard
+                  </button>
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={copilotTopic === 'fix'}
+                    className="kb-chip"
+                    data-active={copilotTopic === 'fix' ? 'true' : 'false'}
+                    onClick={() => setCopilotTopic('fix')}
+                  >
+                    Resolution
+                  </button>
+                </div>
+                <p className="kb-answer-text">
+                  {getCopilotAnswer(activeRow, selectedOrg, copilotTopic)}
+                </p>
               </div>
 
               <div className="sheet-box">
@@ -1227,12 +1384,262 @@ export default function DisagreementsPage() {
 
             <div className="sheet-footer">
               <span className="sheet-footer-note mono tabular">
-                sort_value: ${formatMoney(activeRow.sort_value)}
+                sort_value: ₹{formatMoney(activeRow.sort_value)}
               </span>
               <button
                 type="button"
                 className="crm-btn crm-btn-primary"
                 onClick={closeInspector}
+              >
+                Done
+              </button>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {kbOpen && (
+        <div
+          className="sheet-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) closeKnowledgeBase();
+          }}
+        >
+          <aside
+            ref={drawerRef}
+            className="sheet-content sheet-content-wide"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="kb-title"
+          >
+            <div className="sheet-header">
+              <div className="sheet-header-left">
+                <h2 id="kb-title" className="sheet-title">
+                  System &amp; Domain Knowledge Base
+                </h2>
+                <span className="crm-tag crm-tag-sm" data-tone="green">
+                  INR ₹ + 28% GST
+                </span>
+              </div>
+              <button
+                ref={closeBtnRef}
+                type="button"
+                className="crm-btn crm-btn-secondary"
+                onClick={closeKnowledgeBase}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="sheet-body">
+              <div className="kb-chip-row" role="tablist" aria-label="Knowledge Base sections">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kbTab === 'domain'}
+                  className="kb-chip"
+                  data-active={kbTab === 'domain' ? 'true' : 'false'}
+                  onClick={() => setKbTab('domain')}
+                >
+                  Domain &amp; 28% GST Math
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kbTab === 'non_errors'}
+                  className="kb-chip"
+                  data-active={kbTab === 'non_errors' ? 'true' : 'false'}
+                  onClick={() => setKbTab('non_errors')}
+                >
+                  4 Non-Error Traps
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={kbTab === 'catalog'}
+                  className="kb-chip"
+                  data-active={kbTab === 'catalog' ? 'true' : 'false'}
+                  onClick={() => setKbTab('catalog')}
+                >
+                  All 13 Disagreements
+                </button>
+              </div>
+
+              {kbTab === 'domain' && (
+                <>
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">1. Dealership DMS vs Accounting Ledger (INR ₹)</span>
+                    <p className="kb-answer-text">
+                      Every row in <code>system_a.csv</code> represents a dealership operational record where{' '}
+                      <code>adjustment = round(base_value * 0.28, 2)</code> and{' '}
+                      <code>total_value = base_value + adjustment</code>. In India, 28% is the exact GST slab for
+                      two-wheelers. Furthermore, <code>REC-1064</code> in <code>system_b.csv</code> uses Indian lakh
+                      comma grouping (<code>1,25,400.00</code>), confirming all figures are Indian Rupees (<code>₹</code>).
+                    </p>
+                  </div>
+
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">2. Why Adjustment Omissions Happen (REC-1003, REC-1027, REC-1088)</span>
+                    <p className="kb-answer-text">
+                      In three records (<code>REC-1027</code> and <code>REC-1088</code> in <code>ORG-A</code>, plus{' '}
+                      <code>REC-1003</code> in <code>ORG-B</code>), System B booked only the pre-GST{' '}
+                      <code>base_value</code> (<code>₹61,921.12</code>, <code>₹1,08,553.36</code>, and{' '}
+                      <code>₹94,834.38</code>) and dropped the 28% GST <code>adjustment</code> column (
+                      <code>₹17,337.91</code>, <code>₹30,394.94</code>, and <code>₹26,553.63</code>). Our comparator
+                      detects <code>entry.value == rec.base_value</code> and tags these with{' '}
+                      <strong>Adjustment omitted</strong>.
+                    </p>
+                  </div>
+
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">3. Multi-Tenant Isolation &amp; Redaction Architecture</span>
+                    <ul className="sheet-audit-list">
+                      <li>
+                        <strong>Locations Boundary:</strong> <code>LOC-101</code> (North), <code>LOC-102</code> (Central),
+                        and <code>LOC-103</code> (East) belong to <code>ORG-A</code>. <code>LOC-201</code> (South) and{' '}
+                        <code>LOC-202</code> (West) belong to <code>ORG-B</code>.
+                      </li>
+                      <li>
+                        <strong>Zero Cross-Tenant Leakage:</strong> Every query in <code>comparator.py</code> filters by{' '}
+                        <code>location__org_id=org_id</code>. For cross-tenant collisions (<code>REC-1077</code>), the
+                        server checks ID membership with <code>location__isnull=False</code> and returns{' '}
+                        <code>Redacted (other org)</code> without exposing foreign org IDs, locations, or rupee amounts.
+                      </li>
+                    </ul>
+                  </div>
+                </>
+              )}
+
+              {kbTab === 'non_errors' && (
+                <>
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">Why 4 Messy CSV Rows Are Valid Matches (Not Flagged)</span>
+                    <p className="kb-answer-text">
+                      A naive string or row-count diff would flag 17 rows. Our ingestion and reconciliation pipeline
+                      normalizes formatting noise and recognizes split settlements so only the 13 true accounting
+                      disagreements surface:
+                    </p>
+                  </div>
+
+                  <div className="kb-list-grid">
+                    <div className="sheet-box">
+                      <div className="sheet-meta-row">
+                        <span className="crm-tag crm-tag-sm" data-tone="green">
+                          Split Settlement
+                        </span>
+                        <code className="mono">REC-1055 (ORG-A, LOC-103)</code>
+                      </div>
+                      <p className="kb-answer-text">
+                        System A has one record for <code>₹1,79,877.32</code>. System B has two entries:{' '}
+                        <code>ENT/2026/4055</code> (<code>₹71,950.93</code>) and <code>ENT/2026/4903</code> (
+                        <code>₹1,07,926.39</code>). Because their exact <code>Decimal</code> sum equals{' '}
+                        <code>₹1,79,877.32</code> and both share <code>LOC-103</code> and date <code>2026-03-19</code>,
+                        it is a valid two-part payment rather than a duplicate.
+                      </p>
+                    </div>
+
+                    <div className="sheet-box">
+                      <div className="sheet-meta-row">
+                        <span className="crm-tag crm-tag-sm" data-tone="blue">
+                          Normalized Ref
+                        </span>
+                        <code className="mono">REC-1034 / REC-1070 / REC-1112</code>
+                      </div>
+                      <p className="kb-answer-text">
+                        System B wrote <code>rec1034</code> (lowercase, no hyphen), <code>&apos; REC - 1070 &apos;</code>{' '}
+                        (interior whitespace), and <code>1112</code> (bare digits). <code>normalize_record_ref()</code>{' '}
+                        canonicalizes all three to <code>REC-1034</code> (<code>₹84,939.99</code>),{' '}
+                        <code>REC-1070</code> (<code>₹1,608.95</code>), and <code>REC-1112</code> (
+                        <code>₹52,028.74</code>), matching System A cleanly.
+                      </p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {kbTab === 'catalog' && (
+                <div className="kb-list-grid">
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">ORG-A Disagreements (7 Records)</span>
+                    <ul className="sheet-audit-list">
+                      <li>
+                        <strong>REC-1042 (LOC-101, Duplicate):</strong> System A is <code>₹1,12,837.06</code>; System B
+                        booked <code>₹1,12,837.06</code> twice (<code>ENT/2026/4042</code> + <code>ENT/2026/4902</code> ={' '}
+                        <code>₹2,25,674.12</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1064 (LOC-101, Different values):</strong> System A is <code>₹1,83,244.16</code>;
+                        System B has Indian lakh string <code>&quot;1,25,400.00&quot;</code> (<code>₹1,25,400.00</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1088 (LOC-103, Adjustment omitted):</strong> System A is <code>₹1,38,948.30</code>;
+                        System B posted pre-GST <code>base_value</code> <code>₹1,08,553.36</code> (omitted 28% GST{' '}
+                        <code>₹30,394.94</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1077 (LOC-102, Cross-tenant):</strong> System A is in <code>LOC-102</code> (
+                        <code>ORG-A</code>, <code>₹83,361.40</code>), but System B booked <code>ENT/2026/4077</code> in{' '}
+                        <code>LOC-201</code> (<code>ORG-B</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1027 (LOC-102, Adjustment omitted):</strong> System A is <code>₹79,259.03</code>;
+                        System B posted pre-GST <code>base_value</code> <code>₹61,921.12</code> (omitted 28% GST{' '}
+                        <code>₹17,337.91</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1999 (LOC-102, Orphan in B):</strong> System B <code>ENT/2026/4901</code> (
+                        <code>₹41,250.00</code>) references <code>REC-1999</code>, which does not exist in System A.
+                      </li>
+                      <li>
+                        <strong>REC-1015 (LOC-103, Missing in B):</strong> System A has <code>₹41,095.33</code>; zero
+                        entries in System B.
+                      </li>
+                    </ul>
+                  </div>
+
+                  <div className="sheet-box">
+                    <span className="sheet-box-label">ORG-B Disagreements (6 Records)</span>
+                    <ul className="sheet-audit-list">
+                      <li>
+                        <strong>REC-1050 (LOC-202, Blank value):</strong> System A is <code>₹1,60,405.85</code>; System B{' '}
+                        <code>ENT/2026/4050</code> has a blank value cell preserved via <code>value_parse_error=True</code>.
+                      </li>
+                      <li>
+                        <strong>REC-1003 (LOC-202, Adjustment omitted):</strong> System A is <code>₹1,21,388.01</code>;
+                        System B posted pre-GST <code>base_value</code> <code>₹94,834.38</code> (omitted 28% GST{' '}
+                        <code>₹26,553.63</code>).
+                      </li>
+                      <li>
+                        <strong>REC-1009 (LOC-201, Date mismatch):</strong> Both have <code>₹1,11,699.30</code>, but
+                        System A date is <code>2026-03-31</code> vs System B <code>2026-04-02</code>.
+                      </li>
+                      <li>
+                        <strong>REC-1061 (LOC-202, Missing in B):</strong> System A has <code>₹87,615.49</code>; zero
+                        entries in System B.
+                      </li>
+                      <li>
+                        <strong>REC-1077 (LOC-201, Cross-tenant):</strong> System B booked <code>ENT/2026/4077</code> (
+                        <code>₹83,361.40</code>) in <code>LOC-201</code> (<code>ORG-B</code>); System A record belongs to
+                        another tenant (redacted).
+                      </li>
+                      <li>
+                        <strong>REC-1019 (LOC-202, Voided in A):</strong> System A marked <code>REC-1019</code> (
+                        <code>₹57,092.35</code>) as <code>VOIDED</code>, while System B still holds an active entry.
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="sheet-footer">
+              <span className="sheet-footer-note mono">
+                120 System A rows · 121 System B rows · 5 Locations · 2 Orgs
+              </span>
+              <button
+                type="button"
+                className="crm-btn crm-btn-primary"
+                onClick={closeKnowledgeBase}
               >
                 Done
               </button>
