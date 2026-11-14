@@ -1,5 +1,6 @@
 'use client';
 
+import type { CSSProperties } from 'react';
 import { useEffect, useState } from 'react';
 
 interface Disagreement {
@@ -34,6 +35,71 @@ function getReasonTone(reason: string): BadgeTone {
   return 'neutral';
 }
 
+function ChevronDownIcon() {
+  return (
+    <svg
+      className="select-chevron"
+      width="16"
+      height="16"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      <path
+        d="M4.25 6.25 8 10l3.75-3.75"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function StatusIcon({ tone }: { tone: BadgeTone }) {
+  if (tone === 'danger') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d="M8 2.25 14 13H2L8 2.25Z"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinejoin="round"
+        />
+        <path d="M8 6.25v3.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="8" cy="11.25" r="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (tone === 'warn') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <circle cx="8" cy="8" r="5.75" stroke="currentColor" strokeWidth="1.5" />
+        <path d="M8 5.25v3.25" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+        <circle cx="8" cy="11" r="0.75" fill="currentColor" />
+      </svg>
+    );
+  }
+  if (tone === 'accent') {
+    return (
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path
+          d="M3 5.5h10M3 10.5h10"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <rect x="2.5" y="3.25" width="11" height="10" rx="2" stroke="currentColor" strokeWidth="1.5" />
+      <path d="M2.5 6.5h11" stroke="currentColor" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
 function ValueCell({
   label,
   parsed,
@@ -64,6 +130,7 @@ export default function DisagreementsPage() {
   const [hasLoadedRows, setHasLoadedRows] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [renderBatch, setRenderBatch] = useState<number>(0);
   const [reloadKey, setReloadKey] = useState<number>(0);
 
   useEffect(() => {
@@ -115,6 +182,7 @@ export default function DisagreementsPage() {
       .then((data) => {
         setRows(data.disagreements || []);
         setHasLoadedRows(true);
+        setRenderBatch((n) => n + 1);
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
@@ -131,6 +199,7 @@ export default function DisagreementsPage() {
     return () => controller.abort();
   }, [selectedOrg, selectedReason, sortOrder, reloadKey]);
 
+  const selectedOrgIndex = Math.max(0, orgs.indexOf(selectedOrg));
   const hasFilters = Boolean(selectedReason || sortOrder !== 'value_desc');
 
   return (
@@ -145,6 +214,16 @@ export default function DisagreementsPage() {
 
         <div className="org-switcher-wrap">
           <div className="segmented-control" role="group" aria-label="Select organization">
+            {orgs.length > 0 && (
+              <span
+                className="segmented-indicator"
+                aria-hidden="true"
+                style={{
+                  width: `calc((100% - 8px) / ${orgs.length})`,
+                  transform: `translateX(${selectedOrgIndex * 100}%)`,
+                }}
+              />
+            )}
             {orgs.length === 0 ? (
               <button type="button" className="segmented-btn" disabled>
                 Loading...
@@ -163,7 +242,18 @@ export default function DisagreementsPage() {
               ))
             )}
           </div>
-          <span className="scope-hint">API scoped to {selectedOrg || 'selected org'} only</span>
+          <span className="scope-hint">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
+              <path
+                d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
+            </svg>
+            API scoped to {selectedOrg || 'selected org'} only
+          </span>
         </div>
       </header>
 
@@ -172,35 +262,41 @@ export default function DisagreementsPage() {
           <label className="field-label" htmlFor="reason-select">
             Reason
           </label>
-          <select
-            id="reason-select"
-            className="control-select"
-            value={selectedReason}
-            onChange={(e) => setSelectedReason(e.target.value)}
-          >
-            <option value="">All reasons</option>
-            {reasons.map((r) => (
-              <option key={r.code} value={r.code}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+          <div className="select-wrap">
+            <select
+              id="reason-select"
+              className="control-select"
+              value={selectedReason}
+              onChange={(e) => setSelectedReason(e.target.value)}
+            >
+              <option value="">All reasons</option>
+              {reasons.map((r) => (
+                <option key={r.code} value={r.code}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDownIcon />
+          </div>
         </div>
 
         <div className="field-group">
           <label className="field-label" htmlFor="sort-select">
             Sort by value
           </label>
-          <select
-            id="sort-select"
-            className="control-select"
-            value={sortOrder}
-            onChange={(e) => setSortOrder(e.target.value)}
-          >
-            <option value="value_desc">Highest value first</option>
-            <option value="value_asc">Lowest value first</option>
-            <option value="">Record ID (A-Z)</option>
-          </select>
+          <div className="select-wrap">
+            <select
+              id="sort-select"
+              className="control-select"
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+            >
+              <option value="value_desc">Highest value first</option>
+              <option value="value_asc">Lowest value first</option>
+              <option value="">Record ID (A-Z)</option>
+            </select>
+            <ChevronDownIcon />
+          </div>
         </div>
 
         <div className="controls-meta">
@@ -273,11 +369,16 @@ export default function DisagreementsPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => {
+                {rows.map((row, idx) => {
                   const tone = getReasonTone(row.reason);
                   const rowKey = `${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`;
+                  const delay = Math.min(idx, 6) * 28;
                   return (
-                    <tr key={rowKey} className="ledger-row">
+                    <tr
+                      key={`${renderBatch}-${rowKey}`}
+                      className="ledger-row row-stagger"
+                      style={{ '--row-delay': `${delay}ms` } as CSSProperties}
+                    >
                       <td data-label="Record ID">
                         <code className="record-id">{row.record_id}</code>
                       </td>
@@ -287,7 +388,8 @@ export default function DisagreementsPage() {
                       </td>
                       <td data-label="Reason">
                         <span className="reason-badge" data-tone={tone}>
-                          {row.reason_label}
+                          <StatusIcon tone={tone} />
+                          <span>{row.reason_label}</span>
                         </span>
                       </td>
                       <ValueCell

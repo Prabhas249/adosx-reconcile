@@ -27,9 +27,16 @@
   --neutral-border: #d0d6e2;
   --neutral-text: #414b5c;
 
-  --shadow-card: 0 1px 2px rgba(17, 22, 34, 0.05);
-  --radius-card: 10px;
-  --radius-control: 8px;
+  --shadow-card:
+    0 1px 2px rgba(17, 22, 34, 0.04),
+    0 4px 16px rgba(17, 22, 34, 0.04);
+  --shadow-segmented: 0 1px 3px rgba(17, 22, 34, 0.08);
+
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+
+  --radius-card: 16px;
+  --radius-control: 10px;
+  --radius-segment: 8px;
   --radius-badge: 6px;
 }
 
@@ -72,8 +79,9 @@ code,
 .page-shell {
   width: 100%;
   max-width: 1120px;
+  min-width: 0;
   margin-inline: auto;
-  padding: clamp(20px, 3vw, 32px) clamp(16px, 3vw, 24px) 48px;
+  padding: clamp(20px, 3vw, 36px) clamp(16px, 3vw, 28px) 56px;
 }
 
 .header-bar {
@@ -85,18 +93,27 @@ code,
   margin-block-end: 20px;
 }
 
+.header-bar > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .page-title {
-  margin: 0 0 4px;
-  font-size: clamp(20px, 2.2vw, 26px);
+  margin: 0 0 6px;
+  font-size: clamp(22px, 2.5vw, 28px);
   font-weight: 600;
-  line-height: 1.2;
-  letter-spacing: -0.015em;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-wrap: balance;
 }
 
 .page-subtitle {
   margin: 0;
+  max-width: 62ch;
   color: var(--text-secondary);
   font-size: 14px;
+  line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .org-switcher-wrap {
@@ -107,45 +124,69 @@ code,
 }
 
 .segmented-control {
-  display: inline-flex;
-  gap: 4px;
+  position: relative;
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
   padding: 4px;
-  border-radius: 10px;
+  border-radius: 12px;
   background-color: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
 }
 
+.segmented-indicator {
+  position: absolute;
+  inset-block: 4px;
+  inset-inline-start: 4px;
+  border-radius: var(--radius-segment);
+  background-color: var(--bg-surface);
+  box-shadow: var(--shadow-segmented);
+  transition: transform 200ms var(--ease-out);
+  pointer-events: none;
+}
+
 .segmented-btn {
-  min-width: 88px;
-  min-height: 34px;
+  position: relative;
+  z-index: 1;
+  min-width: 96px;
+  min-height: 36px;
   padding: 6px 14px;
   border: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-segment);
   background: transparent;
   color: var(--text-secondary);
   font: inherit;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 150ms ease,
+    transform 150ms var(--ease-out);
 }
 
 .segmented-btn[aria-pressed='true'] {
-  background-color: var(--bg-surface);
   color: var(--text-primary);
   font-weight: 600;
-  box-shadow: 0 1px 2px rgba(17, 22, 34, 0.08);
+}
+
+.segmented-btn:active {
+  transform: scale(0.96);
 }
 
 .scope-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   color: var(--text-muted);
 }
 
 .controls-card {
   display: grid;
-  grid-template-columns: minmax(190px, 1fr) minmax(190px, 1fr) auto;
+  grid-template-columns: minmax(200px, 1fr) minmax(200px, 1fr) auto;
   align-items: end;
   gap: 12px 16px;
-  padding: 14px 16px;
+  padding: 16px;
   margin-block-end: 16px;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -166,16 +207,43 @@ code,
   color: var(--text-secondary);
 }
 
-.control-select {
+.select-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
   width: 100%;
-  min-height: 38px;
-  padding: 6px 10px;
+}
+
+.control-select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  width: 100%;
+  height: 40px;
+  padding: 0 38px 0 12px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background-color: var(--bg-surface);
   color: var(--text-primary);
   font: inherit;
   font-size: 14px;
+  font-weight: 500;
+  line-height: 38px;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.select-chevron {
+  position: absolute;
+  inset-inline-end: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  pointer-events: none;
+  transition: color 150ms ease;
 }
 
 .controls-meta {
@@ -183,24 +251,34 @@ code,
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
-  min-height: 38px;
+  height: 40px;
 }
 
 .count-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 12px;
-  border-radius: 999px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-control);
+  border: 1px solid var(--border-subtle);
   background-color: var(--bg-subtle);
   color: var(--text-secondary);
   font-size: 13px;
   white-space: nowrap;
 }
 
+.count-pill strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
 .btn-ghost {
-  min-height: 34px;
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  padding: 0 14px;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-control);
   background-color: var(--bg-surface);
@@ -209,6 +287,15 @@ code,
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    transform 150ms var(--ease-out);
+}
+
+.btn-ghost:active {
+  transform: scale(0.96);
 }
 
 .error-banner {
@@ -235,10 +322,11 @@ code,
 
 .table-scroll {
   overflow-x: auto;
+  transition: opacity 160ms ease;
 }
 
 .table-scroll[data-refreshing='true'] {
-  opacity: 0.65;
+  opacity: 0.6;
 }
 
 .ledger-table {
@@ -248,7 +336,7 @@ code,
 }
 
 .ledger-table thead th {
-  padding: 11px 16px;
+  padding: 12px 16px;
   background-color: var(--bg-subtle);
   border-bottom: 1px solid var(--border-subtle);
   color: var(--text-secondary);
@@ -266,18 +354,15 @@ code,
 
 .ledger-row {
   border-top: 1px solid var(--border-subtle);
+  transition: background-color 140ms ease;
 }
 
 .ledger-row:first-child {
   border-top: 0;
 }
 
-.ledger-row:hover {
-  background-color: var(--bg-hover);
-}
-
 .ledger-table tbody td {
-  padding: 12px 16px;
+  padding: 14px 16px;
   vertical-align: top;
 }
 
@@ -301,8 +386,10 @@ code,
 }
 
 .reason-badge {
-  display: inline-block;
-  padding: 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
   border-radius: var(--radius-badge);
   border: 1px solid;
   font-size: 12px;
@@ -342,7 +429,7 @@ code,
 }
 
 .val-raw {
-  margin-top: 2px;
+  margin-top: 3px;
   font-size: 12px;
   color: var(--text-muted);
   overflow-wrap: anywhere;
@@ -351,19 +438,49 @@ code,
 .detail-text {
   color: var(--text-secondary);
   max-width: 46ch;
+  text-wrap: pretty;
 }
 
 .empty-state {
-  padding: 36px 24px;
+  padding: 40px 24px;
   text-align: center;
   color: var(--text-secondary);
 }
 
-@media (max-width: 680px) {
-  .header-bar > div {
-    min-width: 0;
-    max-width: 100%;
+@media (hover: hover) and (pointer: fine) {
+  .segmented-btn:hover:not([aria-pressed='true']) {
+    color: var(--text-primary);
   }
+  .control-select:hover,
+  .btn-ghost:hover {
+    border-color: var(--text-muted);
+    background-color: var(--bg-hover);
+  }
+  .select-wrap:hover .select-chevron {
+    color: var(--text-primary);
+  }
+  .ledger-row:hover {
+    background-color: var(--bg-hover);
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .row-stagger {
+    opacity: 0;
+    transform: translateY(6px);
+    animation: rowEnter 200ms var(--ease-out) forwards;
+    animation-delay: var(--row-delay, 0ms);
+  }
+}
+
+@keyframes rowEnter {
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 720px) {
   .org-switcher-wrap {
     align-items: flex-start;
   }
@@ -392,10 +509,11 @@ code,
     min-width: 0;
   }
   .ledger-row {
-    padding: 12px 16px;
+    padding: 14px 16px;
+    border-top: 1px solid var(--border-subtle);
   }
   .ledger-table tbody td {
-    padding: 5px 0;
+    padding: 6px 0;
     display: flex;
     flex-wrap: wrap;
     align-items: flex-start;
@@ -425,5 +543,15 @@ code,
   .detail-text {
     max-width: none;
     text-align: end;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .segmented-indicator,
+  .segmented-btn,
+  .control-select,
+  .btn-ghost,
+  .table-scroll {
+    transition-duration: 0.01ms;
   }
 }
