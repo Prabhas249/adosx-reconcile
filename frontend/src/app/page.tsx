@@ -22,25 +22,42 @@ interface ReasonOption {
   label: string;
 }
 
-type BadgeTone = 'danger' | 'warn' | 'accent' | 'neutral';
+type TagTone = 'red' | 'orange' | 'amber' | 'blue' | 'purple' | 'yellow' | 'green' | 'neutral';
+type MeterTone = 'primary' | 'blue' | 'amber' | 'red';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 
-function getReasonTone(reason: string): BadgeTone {
-  if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'danger';
-  if (reason === 'MISSING_IN_B' || reason === 'ORPHAN_IN_B') return 'warn';
-  if (reason === 'VALUE_MISMATCH' || reason === 'DUPLICATE_IN_B' || reason === 'UNPARSEABLE_VALUE') {
-    return 'accent';
-  }
+function getReasonTone(reason: string): TagTone {
+  if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'red';
+  if (reason === 'MISSING_IN_B') return 'amber';
+  if (reason === 'ORPHAN_IN_B') return 'orange';
+  if (reason === 'VALUE_MISMATCH') return 'blue';
+  if (reason === 'DUPLICATE_IN_B') return 'purple';
+  if (reason === 'UNPARSEABLE_VALUE') return 'yellow';
   return 'neutral';
+}
+
+function formatMoney(amount: number): string {
+  return new Intl.NumberFormat('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function escapeCsvCell(value: string | number | null): string {
+  const text = String(value ?? '');
+  if (text.includes(',') || text.includes('"') || text.includes('\n')) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
 }
 
 function ChevronDownIcon() {
   return (
     <svg
-      className="select-chevron"
-      width="16"
-      height="16"
+      className="filter-pill-chevron"
+      width="12"
+      height="12"
       viewBox="0 0 16 16"
       fill="none"
       aria-hidden="true"
@@ -59,9 +76,9 @@ function ChevronDownIcon() {
 function SearchIcon() {
   return (
     <svg
-      className="search-icon"
-      width="15"
-      height="15"
+      className="search-pill-icon"
+      width="13"
+      height="13"
       viewBox="0 0 16 16"
       fill="none"
       aria-hidden="true"
@@ -77,47 +94,72 @@ function SearchIcon() {
   );
 }
 
-function StatusIcon({ tone }: { tone: BadgeTone }) {
-  if (tone === 'danger') {
-    return (
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path
-          d="M8 2.25 14 13H2L8 2.25Z"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          strokeLinejoin="round"
-        />
-        <path d="M8 6.25v3.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-        <circle cx="8" cy="11.25" r="0.8" fill="currentColor" />
-      </svg>
-    );
-  }
-  if (tone === 'warn') {
-    return (
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <circle cx="8" cy="8" r="5.75" stroke="currentColor" strokeWidth="1.75" />
-        <path d="M8 5.25v3.25" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
-        <circle cx="8" cy="11" r="0.8" fill="currentColor" />
-      </svg>
-    );
-  }
-  if (tone === 'accent') {
-    return (
-      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path
-          d="M3 5.5h10M3 10.5h10"
-          stroke="currentColor"
-          strokeWidth="1.75"
-          strokeLinecap="round"
-        />
-      </svg>
-    );
-  }
+function ShareExportIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M8 2.5v7.25M5.25 5.25 8 2.5l2.75 2.75M3 10.5v2A1.5 1.5 0 0 0 4.5 14h7a1.5 1.5 0 0 0 1.5-1.5v-2"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function RefreshIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path
+        d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2.75v2.75H10.5"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function DotsHorizontalIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-      <rect x="2.5" y="3.25" width="11" height="10" rx="2" stroke="currentColor" strokeWidth="1.75" />
-      <path d="M2.5 6.5h11" stroke="currentColor" strokeWidth="1.75" />
+      <circle cx="3.5" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.2" fill="currentColor" />
+      <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
     </svg>
+  );
+}
+
+function SegmentBar({
+  percent,
+  tone,
+  segments = 15,
+}: {
+  percent: number;
+  tone: MeterTone;
+  segments?: number;
+}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const filled = Math.round((clamped / 100) * segments);
+  return (
+    <span
+      role="meter"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={clamped}
+      className="segment-bar"
+    >
+      {Array.from({ length: segments }, (_, index) => (
+        <span
+          key={index}
+          className="segment-tick"
+          data-filled={index < filled ? 'true' : 'false'}
+          data-tone={tone}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -144,7 +186,7 @@ function CopyIdButton({ value }: { value: string }) {
       onClick={handleCopy}
     >
       <span className="icon-swap" data-copied={copied ? 'true' : 'false'}>
-        <svg className="icon-copy" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <svg className="icon-copy" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
           <path
             d="M10.5 3.5A1.5 1.5 0 0 0 9 2H4A1.5 1.5 0 0 0 2.5 3.5v5A1.5 1.5 0 0 0 4 10"
@@ -153,7 +195,7 @@ function CopyIdButton({ value }: { value: string }) {
             strokeLinecap="round"
           />
         </svg>
-        <svg className="icon-check" width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <svg className="icon-check" width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <path
             d="m3.5 8.5 3 3 6-6.5"
             stroke="currentColor"
@@ -179,9 +221,16 @@ function ValueCell({
   const showRaw = Boolean(raw) && raw !== parsed && !(parsed === null && raw === '-');
   return (
     <td className="num tabular" data-label={label}>
-      <div>
-        <div className="val-parsed mono">{parsed ?? '-'}</div>
-        {showRaw && <div className="val-raw mono">raw: {raw}</div>}
+      <div className="val-wrap">
+        {parsed !== null ? (
+          <span className="val-parsed mono">
+            <span className="val-currency">$</span>
+            <span>{parsed}</span>
+          </span>
+        ) : (
+          <span className="val-parsed val-missing mono">-</span>
+        )}
+        {showRaw && <span className="val-raw mono">raw: {raw}</span>}
       </div>
     </td>
   );
@@ -316,6 +365,44 @@ export default function DisagreementsPage() {
     );
   }, [rows, searchQuery]);
 
+  const metrics = useMemo(() => {
+    const total = visibleRows.length;
+    const denom = Math.max(1, total);
+    const valueCount = visibleRows.filter((r) => r.reason === 'VALUE_MISMATCH').length;
+    const missingCount = visibleRows.filter((r) => r.reason === 'MISSING_IN_B').length;
+    const criticalCount = visibleRows.filter(
+      (r) => r.reason === 'TENANT_MISMATCH' || r.reason === 'VOIDED_IN_A',
+    ).length;
+
+    let sumA = 0;
+    let sumB = 0;
+    let maxExposure = 0;
+    for (const r of visibleRows) {
+      if (r.system_a_value !== null) {
+        const parsedA = Number(r.system_a_value);
+        if (!Number.isNaN(parsedA)) sumA += parsedA;
+      }
+      if (r.system_b_value !== null) {
+        const parsedB = Number(r.system_b_value);
+        if (!Number.isNaN(parsedB)) sumB += parsedB;
+      }
+      if (r.sort_value > maxExposure) maxExposure = r.sort_value;
+    }
+
+    return {
+      total,
+      valueCount,
+      missingCount,
+      criticalCount,
+      valuePct: (valueCount / denom) * 100,
+      missingPct: (missingCount / denom) * 100,
+      criticalPct: (criticalCount / denom) * 100,
+      sumA,
+      sumB,
+      maxExposure,
+    };
+  }, [visibleRows]);
+
   const selectedOrgIndex = Math.max(0, orgs.indexOf(selectedOrg));
   const hasFilters = Boolean(selectedReason || searchQuery.trim() || sortOrder !== 'value_desc');
 
@@ -337,49 +424,74 @@ export default function DisagreementsPage() {
     }
   };
 
+  const exportCsv = () => {
+    const headers = [
+      'org_id',
+      'record_id',
+      'location_id',
+      'location_name',
+      'reason',
+      'reason_label',
+      'system_a_value',
+      'system_a_raw',
+      'system_b_value',
+      'system_b_raw',
+      'detail',
+    ];
+    const lines = [headers.join(',')];
+    for (const r of visibleRows) {
+      lines.push(
+        [
+          selectedOrg,
+          r.record_id,
+          r.location_id,
+          r.location_name,
+          r.reason,
+          r.reason_label,
+          r.system_a_value,
+          r.system_a_raw,
+          r.system_b_value,
+          r.system_b_raw,
+          r.detail,
+        ]
+          .map(escapeCsvCell)
+          .join(','),
+      );
+    }
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `disagreements-${selectedOrg || 'org'}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const toggleReasonFilter = (code: string) => {
+    setSelectedReason((prev) => (prev === code ? '' : code));
+  };
+
   return (
-    <main className="page-shell">
-      <div className="page-content" inert={activeRow ? true : undefined}>
-        <header className="header-bar">
-          <div>
-            <div className="eyebrow">ADOSX Reconciliation</div>
-            <h1 className="page-title">System A and System B Disagreements</h1>
-            <p className="page-subtitle">
-              Reconciles imported event totals, dates, and references inside a single org boundary.
+    <main className="crm-shell">
+      <div className="crm-main" inert={activeRow ? true : undefined}>
+        <header className="crm-header">
+          <div className="crm-header-left">
+            <div className="crm-title-row">
+              <span className="crm-brand-pill">
+                <span className="crm-status-dot" aria-hidden="true" />
+                <span>ADOSX Reconcile</span>
+              </span>
+              <h1 className="crm-title">System A and System B Disagreements</h1>
+            </div>
+            <p className="crm-subtitle">
+              Reconciles imported event totals, dates, and references strictly inside the selected org boundary.
             </p>
           </div>
 
-          <div className="org-switcher-wrap">
-            <div className="segmented-control" role="group" aria-label="Select organization">
-              {orgs.length > 0 && (
-                <span
-                  className="segmented-indicator"
-                  aria-hidden="true"
-                  style={{
-                    width: `calc((100% - 8px) / ${orgs.length})`,
-                    transform: `translateX(${selectedOrgIndex * 100}%)`,
-                  }}
-                />
-              )}
-              {orgs.length === 0 ? (
-                <button type="button" className="segmented-btn" disabled>
-                  Loading...
-                </button>
-              ) : (
-                orgs.map((org) => (
-                  <button
-                    key={org}
-                    type="button"
-                    className="segmented-btn"
-                    aria-pressed={selectedOrg === org}
-                    onClick={() => setSelectedOrg(org)}
-                  >
-                    {org}
-                  </button>
-                ))
-              )}
-            </div>
-            <span className="scope-hint">
+          <div className="crm-header-right">
+            <span className="scope-badge">
               <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                 <rect x="3" y="7" width="10" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.5" />
                 <path
@@ -389,92 +501,221 @@ export default function DisagreementsPage() {
                   strokeLinecap="round"
                 />
               </svg>
-              API scoped to {selectedOrg || 'selected org'} only
+              <span>Scoped to</span>
+              <strong className="mono">{selectedOrg || '...'}</strong>
             </span>
+
+            <div className="org-segmented" role="group" aria-label="Select organization">
+              {orgs.length > 0 && (
+                <span
+                  className="org-segmented-indicator"
+                  aria-hidden="true"
+                  style={{
+                    width: `calc((100% - 6px) / ${orgs.length})`,
+                    transform: `translateX(${selectedOrgIndex * 100}%)`,
+                  }}
+                />
+              )}
+              {orgs.length === 0 ? (
+                <button type="button" className="org-segmented-btn" disabled>
+                  Loading...
+                </button>
+              ) : (
+                orgs.map((org) => (
+                  <button
+                    key={org}
+                    type="button"
+                    className="org-segmented-btn mono"
+                    aria-pressed={selectedOrg === org}
+                    onClick={() => setSelectedOrg(org)}
+                  >
+                    {org}
+                  </button>
+                ))
+              )}
+            </div>
           </div>
         </header>
 
-        <section className="controls-card" aria-label="Filter and sort controls">
-          <div className="field-group">
-            <label className="field-label" htmlFor="search-input">
-              Search record or location
-            </label>
-            <div className="input-wrap">
+        <section className="kpi-strip" aria-label="Disagreement summary metrics">
+          <button
+            type="button"
+            className="kpi-cell"
+            data-active={selectedReason === '' ? 'true' : 'false'}
+            onClick={() => setSelectedReason('')}
+          >
+            <div className="kpi-top">
+              <span className="kpi-label">Visible Disagreements</span>
+              <span className="crm-tag" data-tone="neutral">
+                All reasons
+              </span>
+            </div>
+            <div className="kpi-bottom">
+              <span className="kpi-value tabular">{metrics.total}</span>
+              <SegmentBar percent={metrics.total > 0 ? 100 : 0} tone="primary" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="kpi-cell"
+            data-active={selectedReason === 'VALUE_MISMATCH' ? 'true' : 'false'}
+            onClick={() => toggleReasonFilter('VALUE_MISMATCH')}
+          >
+            <div className="kpi-top">
+              <span className="kpi-label">Value Mismatches</span>
+              <span className="crm-tag" data-tone="blue">
+                Delta
+              </span>
+            </div>
+            <div className="kpi-bottom">
+              <span className="kpi-value tabular">{metrics.valueCount}</span>
+              <SegmentBar percent={metrics.valuePct} tone="blue" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="kpi-cell"
+            data-active={selectedReason === 'MISSING_IN_B' ? 'true' : 'false'}
+            onClick={() => toggleReasonFilter('MISSING_IN_B')}
+          >
+            <div className="kpi-top">
+              <span className="kpi-label">Missing in System B</span>
+              <span className="crm-tag" data-tone="amber">
+                Unmatched
+              </span>
+            </div>
+            <div className="kpi-bottom">
+              <span className="kpi-value tabular">{metrics.missingCount}</span>
+              <SegmentBar percent={metrics.missingPct} tone="amber" />
+            </div>
+          </button>
+
+          <button
+            type="button"
+            className="kpi-cell"
+            data-active={selectedReason === 'TENANT_MISMATCH' ? 'true' : 'false'}
+            onClick={() => toggleReasonFilter('TENANT_MISMATCH')}
+          >
+            <div className="kpi-top">
+              <span className="kpi-label">Tenant &amp; Voided Alerts</span>
+              <span className="crm-tag" data-tone="red">
+                Critical
+              </span>
+            </div>
+            <div className="kpi-bottom">
+              <span className="kpi-value tabular">{metrics.criticalCount}</span>
+              <SegmentBar percent={metrics.criticalPct} tone="red" />
+            </div>
+          </button>
+        </section>
+
+        <section className="crm-toolbar" aria-label="Filter and sort controls">
+          <div className="toolbar-filters">
+            <div className="search-pill">
               <SearchIcon />
               <input
                 id="search-input"
                 type="search"
                 name="search"
+                aria-label="Search record or location"
                 autoComplete="off"
-                className="control-input"
-                placeholder="REC-1064, LOC-101..."
+                className="search-pill-input"
+                placeholder="Search REC-1064, LOC-101, reason..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  aria-label="Clear search query"
+                  onClick={() => setSearchQuery('')}
+                >
+                  ×
+                </button>
+              )}
             </div>
-          </div>
 
-          <div className="field-group">
-            <label className="field-label" htmlFor="reason-select">
-              Reason
-            </label>
-            <div className="select-wrap">
-              <select
-                id="reason-select"
-                name="reason"
-                className="control-select"
-                value={selectedReason}
-                onChange={(e) => setSelectedReason(e.target.value)}
-              >
-                <option value="">All reasons</option>
-                {reasons.map((r) => (
-                  <option key={r.code} value={r.code}>
-                    {r.label}
-                  </option>
-                ))}
-              </select>
-              <ChevronDownIcon />
+            <div className="filter-pill">
+              <label className="filter-pill-label" htmlFor="reason-select">
+                Reason
+              </label>
+              <span className="filter-pill-divider" aria-hidden="true" />
+              <div className="filter-pill-select-wrap">
+                <select
+                  id="reason-select"
+                  name="reason"
+                  className="filter-pill-select"
+                  value={selectedReason}
+                  onChange={(e) => setSelectedReason(e.target.value)}
+                >
+                  <option value="">All reasons</option>
+                  {reasons.map((r) => (
+                    <option key={r.code} value={r.code}>
+                      {r.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDownIcon />
+              </div>
             </div>
-          </div>
 
-          <div className="field-group">
-            <label className="field-label" htmlFor="sort-select">
-              Sort by value
-            </label>
-            <div className="select-wrap">
-              <select
-                id="sort-select"
-                name="sort"
-                className="control-select"
-                value={sortOrder}
-                onChange={(e) => setSortOrder(e.target.value)}
-              >
-                <option value="value_desc">Highest value first</option>
-                <option value="value_asc">Lowest value first</option>
-                <option value="">Record ID (A–Z)</option>
-              </select>
-              <ChevronDownIcon />
+            <div className="filter-pill">
+              <label className="filter-pill-label" htmlFor="sort-select">
+                Sort by
+              </label>
+              <span className="filter-pill-divider" aria-hidden="true" />
+              <div className="filter-pill-select-wrap">
+                <select
+                  id="sort-select"
+                  name="sort"
+                  className="filter-pill-select"
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value)}
+                >
+                  <option value="value_desc">Highest value first</option>
+                  <option value="value_asc">Lowest value first</option>
+                  <option value="">Record ID (A-Z)</option>
+                </select>
+                <ChevronDownIcon />
+              </div>
             </div>
-          </div>
 
-          <div className="controls-meta">
-            <span className="count-pill tabular" role="status" aria-live="polite">
-              <strong>{visibleRows.length}</strong>
-              <span>disagreement{visibleRows.length === 1 ? '' : 's'}</span>
-            </span>
             {hasFilters && (
               <button
                 type="button"
-                className="btn-ghost"
+                className="crm-btn crm-btn-ghost"
                 onClick={() => {
                   setSelectedReason('');
                   setSearchQuery('');
                   setSortOrder('value_desc');
                 }}
               >
-                Reset
+                Reset filters
               </button>
             )}
+          </div>
+
+          <div className="toolbar-actions">
+            <button
+              type="button"
+              className="crm-btn crm-btn-secondary"
+              onClick={exportCsv}
+              disabled={visibleRows.length === 0}
+            >
+              <ShareExportIcon />
+              <span>Export CSV</span>
+            </button>
+            <button
+              type="button"
+              className="crm-btn crm-btn-primary"
+              onClick={() => setReloadKey((k) => k + 1)}
+            >
+              <RefreshIcon />
+              <span>Re-sync</span>
+            </button>
           </div>
         </section>
 
@@ -483,7 +724,7 @@ export default function DisagreementsPage() {
             <span>{error}</span>
             <button
               type="button"
-              className="btn-ghost"
+              className="crm-btn crm-btn-secondary"
               onClick={() => setReloadKey((k) => k + 1)}
             >
               Retry
@@ -491,26 +732,26 @@ export default function DisagreementsPage() {
           </div>
         )}
 
-        <section className="table-card" aria-label="Disagreements table">
+        <section className="table-region" aria-label="Disagreements table">
           {!hasLoadedRows && loading ? (
             <div className="skeleton-wrap" role="status" aria-label="Loading disagreements">
-              {[0, 1, 2, 3, 4].map((idx) => (
+              {[0, 1, 2, 3, 4, 5].map((idx) => (
                 <div
                   key={idx}
                   className="skeleton-line"
-                  style={{ width: `${92 - idx * 7}%`, marginBottom: idx === 4 ? 0 : '14px' }}
+                  style={{ width: `${96 - idx * 6}%` }}
                 />
               ))}
             </div>
           ) : visibleRows.length === 0 ? (
             <div className="empty-state">
               <p className="empty-title">
-                No disagreements match these filters for {selectedOrg || 'this org'}.
+                No disagreements match the current filters for {selectedOrg || 'this org'}.
               </p>
               {hasFilters && (
                 <button
                   type="button"
-                  className="btn-ghost"
+                  className="crm-btn crm-btn-secondary"
                   onClick={() => {
                     setSelectedReason('');
                     setSearchQuery('');
@@ -523,7 +764,7 @@ export default function DisagreementsPage() {
             </div>
           ) : (
             <div className="table-scroll" data-refreshing={loading ? 'true' : 'false'}>
-              <table className="ledger-table">
+              <table className="crm-table">
                 <thead>
                   <tr>
                     <th>Record ID</th>
@@ -531,7 +772,7 @@ export default function DisagreementsPage() {
                     <th>Reason</th>
                     <th className="num">System A Value</th>
                     <th className="num">System B Value</th>
-                    <th>Detail</th>
+                    <th>Diagnostic Detail</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -540,11 +781,11 @@ export default function DisagreementsPage() {
                     const rowKey = `${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`;
                     const isSelected =
                       activeRow?.record_id === row.record_id && activeRow?.reason === row.reason;
-                    const delay = Math.min(idx, 6) * 28;
+                    const delay = Math.min(idx, 8) * 24;
                     return (
                       <tr
                         key={`${renderBatch}-${rowKey}`}
-                        className="ledger-row row-stagger"
+                        className="crm-row row-stagger"
                         style={{ '--row-delay': `${delay}ms` } as CSSProperties}
                         tabIndex={0}
                         aria-label={`Inspect ${row.record_id} (${row.reason_label})`}
@@ -554,18 +795,19 @@ export default function DisagreementsPage() {
                       >
                         <td data-label="Record ID">
                           <div className="record-cell">
-                            <code className="record-id">{row.record_id}</code>
+                            <code className="record-id mono">{row.record_id}</code>
                             <CopyIdButton value={row.record_id} />
                           </div>
                         </td>
                         <td data-label="Location">
-                          <div className="location-primary">{row.location_name}</div>
-                          <div className="location-id mono">{row.location_id}</div>
+                          <div className="location-cell">
+                            <span className="location-name">{row.location_name}</span>
+                            <span className="location-code mono">{row.location_id}</span>
+                          </div>
                         </td>
                         <td data-label="Reason">
-                          <span className="reason-badge" data-tone={tone}>
-                            <StatusIcon tone={tone} />
-                            <span>{row.reason_label}</span>
+                          <span className="crm-tag" data-tone={tone}>
+                            {row.reason_label}
                           </span>
                         </td>
                         <ValueCell
@@ -578,12 +820,21 @@ export default function DisagreementsPage() {
                           parsed={row.system_b_value}
                           raw={row.system_b_raw}
                         />
-                        <td data-label="Detail">
+                        <td data-label="Diagnostic Detail">
                           <div className="detail-cell">
                             <span className="detail-text">{row.detail}</span>
-                            <span className="inspect-cue" aria-hidden="true">
-                              Inspect
-                            </span>
+                            <button
+                              type="button"
+                              className="action-dots-btn"
+                              tabIndex={-1}
+                              aria-label={`Open ${row.record_id} inspector`}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openInspector(row, e.currentTarget);
+                              }}
+                            >
+                              <DotsHorizontalIcon />
+                            </button>
                           </div>
                         </td>
                       </tr>
@@ -593,78 +844,116 @@ export default function DisagreementsPage() {
               </table>
             </div>
           )}
+
+          <footer className="table-footer" role="status" aria-live="polite">
+            <div className="footer-cell tabular">
+              <strong>{visibleRows.length}</strong>
+              <span>Disagreement{visibleRows.length === 1 ? '' : 's'} in view</span>
+            </div>
+            <div className="footer-cell tabular">
+              <span>Sum System A</span>
+              <strong className="mono">${formatMoney(metrics.sumA)}</strong>
+            </div>
+            <div className="footer-cell tabular">
+              <span>Sum System B</span>
+              <strong className="mono">${formatMoney(metrics.sumB)}</strong>
+            </div>
+            <div className="footer-cell tabular">
+              <span>Peak Exposure</span>
+              <strong className="mono">${formatMoney(metrics.maxExposure)}</strong>
+            </div>
+          </footer>
         </section>
       </div>
 
       {activeRow && (
         <div
-          className="drawer-backdrop"
+          className="sheet-overlay"
           onClick={(e) => {
             if (e.target === e.currentTarget) closeInspector();
           }}
         >
           <aside
             ref={drawerRef}
-            className="drawer-panel"
+            className="sheet-content"
             role="dialog"
             aria-modal="true"
-            aria-labelledby="drawer-title"
+            aria-labelledby="sheet-title"
           >
-            <div className="drawer-header">
-              <div>
-                <div className="drawer-eyebrow mono">
-                  {selectedOrg} · {activeRow.location_id}
-                </div>
-                <div className="drawer-title-row">
-                  <h2 id="drawer-title" className="drawer-title mono">
-                    {activeRow.record_id}
-                  </h2>
-                  <CopyIdButton value={activeRow.record_id} />
-                </div>
-                <span className="reason-badge" data-tone={getReasonTone(activeRow.reason)}>
-                  <StatusIcon tone={getReasonTone(activeRow.reason)} />
-                  <span>{activeRow.reason_label}</span>
+            <div className="sheet-header">
+              <div className="sheet-header-left">
+                <h2 id="sheet-title" className="sheet-title mono">
+                  {activeRow.record_id}
+                </h2>
+                <CopyIdButton value={activeRow.record_id} />
+                <span className="crm-tag" data-tone={getReasonTone(activeRow.reason)}>
+                  {activeRow.reason_label}
                 </span>
               </div>
               <button
                 ref={closeBtnRef}
                 type="button"
-                className="btn-ghost"
+                className="crm-btn crm-btn-secondary"
                 onClick={closeInspector}
               >
                 Close
               </button>
             </div>
 
-            <p className="drawer-detail">{activeRow.detail}</p>
-
-            <div className="drawer-grid">
-              <div className="compare-box">
-                <div className="compare-box-label">System A</div>
-                <div className="compare-box-value mono tabular">
-                  {activeRow.system_a_value ?? '-'}
-                </div>
-                <div className="val-raw mono">raw: {activeRow.system_a_raw || '(none)'}</div>
+            <div className="sheet-body">
+              <div className="sheet-meta-row">
+                <span className="location-code mono">{selectedOrg}</span>
+                <span className="location-code mono">{activeRow.location_id}</span>
+                <span className="location-name">{activeRow.location_name}</span>
               </div>
-              <div className="compare-box">
-                <div className="compare-box-label">System B</div>
-                <div className="compare-box-value mono tabular">
-                  {activeRow.system_b_value ?? '-'}
+
+              <div className="sheet-detail-card">{activeRow.detail}</div>
+
+              <div className="sheet-compare-grid">
+                <div className="sheet-box">
+                  <span className="sheet-box-label">System A</span>
+                  <span className="sheet-box-value mono tabular">
+                    {activeRow.system_a_value !== null ? `$${activeRow.system_a_value}` : '-'}
+                  </span>
+                  <span className="sheet-box-raw mono">
+                    raw: {activeRow.system_a_raw || '(none)'}
+                  </span>
                 </div>
-                <div className="val-raw mono">raw: {activeRow.system_b_raw || '(none)'}</div>
+                <div className="sheet-box">
+                  <span className="sheet-box-label">System B</span>
+                  <span className="sheet-box-value mono tabular">
+                    {activeRow.system_b_value !== null ? `$${activeRow.system_b_value}` : '-'}
+                  </span>
+                  <span className="sheet-box-raw mono">
+                    raw: {activeRow.system_b_raw || '(none)'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="sheet-box">
+                <span className="sheet-box-label">Tenant Boundary Verification</span>
+                <span className="location-name">
+                  {activeRow.location_name} ({activeRow.location_id})
+                </span>
+                <span className="sheet-box-raw">
+                  {activeRow.reason === 'TENANT_MISMATCH'
+                    ? 'Foreign organization identifiers and values are redacted on the server before leaving Django.'
+                    : `Scoped strictly to ${selectedOrg} with zero cross-tenant leakage.`}
+                </span>
               </div>
             </div>
 
-            <div className="compare-box">
-              <div className="compare-box-label">Location and Tenant Scope</div>
-              <div className="compare-box-primary">
-                {activeRow.location_name} ({activeRow.location_id})
-              </div>
-              <div className="compare-box-note">
-                {activeRow.reason === 'TENANT_MISMATCH'
-                  ? 'Foreign org identifiers and values are redacted on the server before this response leaves Django.'
-                  : `Scoped strictly to ${selectedOrg}.`}
-              </div>
+            <div className="sheet-footer">
+              <span className="sheet-footer-note mono">
+                sort_value: ${formatMoney(activeRow.sort_value)}
+              </span>
+              <button
+                type="button"
+                className="crm-btn crm-btn-primary"
+                onClick={closeInspector}
+              >
+                Done
+              </button>
             </div>
           </aside>
         </div>
