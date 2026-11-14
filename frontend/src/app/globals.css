@@ -55,10 +55,12 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-size-adjust: 100%;
+  overflow-x: hidden;
 }
 
 body {
   margin: 0;
+  overflow-x: hidden;
   background-color: var(--bg-page);
   color: var(--text-primary);
   font-family:
@@ -789,7 +791,15 @@ code,
 
 @media (max-width: 680px) {
   .org-switcher-wrap {
-    align-items: flex-start;
+    width: 100%;
+    align-items: stretch;
+  }
+  .segmented-control {
+    display: grid;
+    width: 100%;
+  }
+  .segmented-btn {
+    min-width: 0;
   }
   .controls-card {
     grid-template-columns: 1fr;
@@ -799,7 +809,7 @@ code,
     font-size: 16px;
   }
   .table-scroll {
-    overflow-x: visible;
+    overflow-x: hidden;
   }
   .ledger-table thead {
     display: none;
