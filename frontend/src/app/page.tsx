@@ -38,7 +38,6 @@ type SegmentTone = 'auto' | 'danger' | 'warning' | 'success';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 const THEME_KEY = 'adosx-theme';
-const TREND_PATTERN = [false, true, false, false, true, true, false, true, false, true, true, true];
 
 function getReasonTone(reason: string): TagTone {
   if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'red';
@@ -111,31 +110,6 @@ function getAuditSteps(row: Disagreement, org: string): string[] {
   return steps;
 }
 
-function buildSparklineValues(row: Disagreement, maxExposure: number): number[] {
-  const a = row.system_a_value !== null ? Math.abs(Number(row.system_a_value)) || 0 : 0;
-  const b = row.system_b_value !== null ? Math.abs(Number(row.system_b_value)) || 0 : 0;
-  const delta = Math.abs(a - b);
-  const top = Math.max(1, maxExposure);
-  const rA = Math.max(2, Math.min(14, Math.round((a / top) * 14)));
-  const rB = Math.max(2, Math.min(14, Math.round((b / top) * 14)));
-  const rD = Math.max(2, Math.min(14, Math.round((delta / top) * 14)));
-  const rS = Math.max(3, Math.min(14, Math.round((row.sort_value / top) * 14)));
-  return [
-    Math.max(2, rA - 3),
-    rA,
-    Math.max(2, Math.round((rA + rB) / 2)),
-    rB,
-    Math.max(2, rD - 2),
-    rD,
-    Math.max(2, rS - 4),
-    Math.max(3, rA - 1),
-    rB,
-    Math.max(3, rD),
-    Math.max(4, rS - 2),
-    rS,
-  ];
-}
-
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
     minimumFractionDigits: 2,
@@ -187,25 +161,6 @@ function SegmentBar({
             : tone
           : undefined;
         return <span key={index} className="segment-tick" data-tone={tickTone} />;
-      })}
-    </span>
-  );
-}
-
-function Sparkline({ values }: { values: number[] }) {
-  return (
-    <span aria-hidden="true" className="sparkline">
-      {values.map((v, idx) => {
-        const h = Math.min(14, Math.max(2, Math.round(v)));
-        const bright = TREND_PATTERN[idx % TREND_PATTERN.length];
-        return (
-          <span
-            key={idx}
-            className="sparkline-bar"
-            data-bright={bright ? 'true' : 'false'}
-            style={{ height: `${h}px` }}
-          />
-        );
       })}
     </span>
   );
@@ -1119,7 +1074,6 @@ export default function DisagreementsPage() {
                     <th className="num">System A Value</th>
                     <th className="num">System B Value</th>
                     <th className="num">Exposure Share</th>
-                    <th>Variance Trend</th>
                     <th>Diagnostic Detail</th>
                   </tr>
                 </thead>
@@ -1135,7 +1089,6 @@ export default function DisagreementsPage() {
                       metrics.maxExposure > 0
                         ? Math.max(8, Math.round((row.sort_value / metrics.maxExposure) * 100))
                         : 0;
-                    const sparkValues = buildSparklineValues(row, metrics.maxExposure);
 
                     return (
                       <tr
@@ -1187,9 +1140,6 @@ export default function DisagreementsPage() {
                             <SegmentBar percent={exposurePct} tone="auto" />
                             <span className="exposure-pct">{exposurePct}%</span>
                           </span>
-                        </td>
-                        <td data-label="Variance Trend">
-                          <Sparkline values={sparkValues} />
                         </td>
                         <td data-label="Diagnostic Detail">
                           <div className="detail-cell">
