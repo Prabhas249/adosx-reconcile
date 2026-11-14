@@ -1,3 +1,6 @@
+from collections import Counter
+from decimal import Decimal
+
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -32,11 +35,18 @@ def list_disagreements(request):
 
     try:
         rows = find_disagreements(org_id=org_id, reason_filter=reason, sort_order=sort)
+        org_rows = find_disagreements(org_id=org_id) if reason else rows
     except ValueError as exc:
         return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    max_sort = max((Decimal(r['sort_value']) for r in org_rows), default=Decimal('0.00'))
+    reason_counts = dict(Counter(r['reason'] for r in org_rows))
 
     return Response({
         'org_id': org_id,
         'count': len(rows),
+        'total_org_count': len(org_rows),
+        'org_max_sort_value': f'{max_sort:.2f}',
+        'reason_counts': reason_counts,
         'disagreements': rows,
     })

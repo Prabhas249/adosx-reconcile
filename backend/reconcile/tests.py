@@ -276,12 +276,22 @@ class ReconciliationTests(TestCase):
         )
         self.assertNotIn('LOC-201', str(payload_a))
         self.assertNotIn('ORG-B', str(payload_a))
-        sort_vals_a = [r['sort_value'] for r in payload_a['disagreements']]
+        self.assertEqual(payload_a['total_org_count'], 7)
+        self.assertEqual(payload_a['org_max_sort_value'], '225674.12')
+        sort_vals_a = [Decimal(r['sort_value']) for r in payload_a['disagreements']]
         self.assertEqual(sort_vals_a, sorted(sort_vals_a, reverse=True))
+
+        tenant_a = next(r for r in payload_a['disagreements'] if r['record_id'] == 'REC-1077')
+        self.assertIsNotNone(tenant_a['system_a_row'])
+        self.assertEqual(tenant_a['system_b_rows'], [])
 
         filtered = client.get('/api/disagreements/?org=ORG-A&reason=VALUE_MISMATCH')
         self.assertEqual(filtered.status_code, 200)
-        self.assertEqual([r['record_id'] for r in filtered.json()['disagreements']], ['REC-1027', 'REC-1064', 'REC-1088'])
+        filtered_payload = filtered.json()
+        self.assertEqual([r['record_id'] for r in filtered_payload['disagreements']], ['REC-1027', 'REC-1064', 'REC-1088'])
+        self.assertEqual(filtered_payload['total_org_count'], 7)
+        self.assertEqual(filtered_payload['org_max_sort_value'], '225674.12')
+        self.assertEqual(filtered_payload['reason_counts']['MISSING_IN_B'], 1)
 
         resp_b = client.get('/api/disagreements/?org=ORG-B')
         self.assertEqual(resp_b.status_code, 200)
@@ -299,16 +309,19 @@ class ReconciliationTests(TestCase):
         )
         self.assertNotIn('LOC-102', str(payload_b))
         self.assertNotIn('ORG-A', str(payload_b))
+        tenant_b = next(r for r in payload_b['disagreements'] if r['record_id'] == 'REC-1077')
+        self.assertIsNone(tenant_b['system_a_row'])
+        self.assertEqual(len(tenant_b['system_b_rows']), 1)
 
-    def test_incomplete_split_payment_flags_value_mismatch_not_duplicate(self):
+    def test_incomplete_split_payment_flags_unresolved_multi_entry(self):
         self._create_a(record_id='REC-1057', total='1000.00')
         self._create_b(entry_id='ENT/2026/4057', raw_ref='REC-1057', raw_value='400.00')
         self._create_b(entry_id='ENT/2026/4906', raw_ref='REC-1057', raw_value='300.00')
         rows = find_disagreements('ORG-A')
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]['reason'], 'VALUE_MISMATCH')
+        self.assertEqual(rows[0]['reason'], 'MULTI_ENTRY_UNRESOLVED')
         self.assertEqual(rows[0]['system_b_value'], '700.00')
-        self.assertIn('2-entry sum (700.00', rows[0]['detail'])
+        self.assertIn('sum to 700.00', rows[0]['detail'])
 
     def test_importer_preserves_duplicate_keys_and_reports_unmapped_locations(self):
         import tempfile

@@ -8,6 +8,7 @@ REASON_LABELS = {
     'MISSING_IN_B': 'Missing in System B',
     'ORPHAN_IN_B': 'Orphan entry in System B',
     'DUPLICATE_IN_B': 'Duplicate entry in System B',
+    'MULTI_ENTRY_UNRESOLVED': 'Unresolved multi-entry mismatch',
     'VALUE_MISMATCH': 'Different values',
     'UNPARSEABLE_VALUE': 'Blank or unparseable value',
     'VOIDED_IN_A': 'Voided in System A',
@@ -32,10 +33,17 @@ class Disagreement:
     system_b_value: str | None
     system_b_raw: str
     sort_value: Decimal
+    system_a_base_value: str | None = None
+    system_a_adjustment: str | None = None
+    system_a_date: str | None = None
+    system_a_row: int | None = None
+    system_b_date: str | None = None
+    system_b_rows: list[dict] | None = None
 
     def to_dict(self) -> dict:
         data = asdict(self)
-        data['sort_value'] = float(self.sort_value)
+        data['sort_value'] = f'{self.sort_value:.2f}'
+        data['system_b_rows'] = self.system_b_rows or []
         return data
 
 
@@ -49,6 +57,18 @@ def _location_meta(row: SystemARecord | SystemBEntry) -> tuple[str, str]:
     return row.location_id_raw, row.location_id_raw
 
 
+def _entry_provenance(entries: list[SystemBEntry]) -> list[dict]:
+    return [
+        {
+            'entry_id': entry.entry_id,
+            'row': entry.source_row,
+            'raw_value': entry.raw_value or '(blank)',
+            'recorded_on': entry.raw_recorded_on or None,
+        }
+        for entry in entries
+    ]
+
+
 def _build_disagreement(
     *,
     record_id: str,
@@ -60,6 +80,12 @@ def _build_disagreement(
     a_raw: str,
     b_val: Decimal | None,
     b_raw: str,
+    a_base_val: Decimal | None = None,
+    a_adjustment: Decimal | None = None,
+    a_date: str | None = None,
+    a_row: int | None = None,
+    b_date: str | None = None,
+    b_rows: list[dict] | None = None,
 ) -> Disagreement:
     candidates = [abs(v) for v in (a_val, b_val) if v is not None]
     return Disagreement(
@@ -74,6 +100,12 @@ def _build_disagreement(
         system_b_value=_fmt_dec(b_val),
         system_b_raw=b_raw,
         sort_value=max(candidates, default=Decimal('0.00')),
+        system_a_base_value=_fmt_dec(a_base_val),
+        system_a_adjustment=_fmt_dec(a_adjustment),
+        system_a_date=a_date,
+        system_a_row=a_row,
+        system_b_date=b_date,
+        system_b_rows=b_rows or [],
     )
 
 
@@ -85,8 +117,10 @@ def _for_record(
     b_val: Decimal | None = None,
     b_raw: str = '-',
     a_raw: str | None = None,
+    entries: list[SystemBEntry] | None = None,
 ) -> Disagreement:
     loc_id, loc_name = _location_meta(rec)
+    b_dates = sorted({e.raw_recorded_on for e in (entries or []) if e.raw_recorded_on})
     return _build_disagreement(
         record_id=rec.record_id,
         reason=reason,
@@ -97,6 +131,12 @@ def _for_record(
         a_raw=rec.raw_total_value if a_raw is None else a_raw,
         b_val=b_val,
         b_raw=b_raw,
+        a_base_val=rec.base_value,
+        a_adjustment=rec.adjustment,
+        a_date=rec.raw_event_date or None,
+        a_row=rec.source_row,
+        b_date=', '.join(b_dates) if b_dates else None,
+        b_rows=_entry_provenance(entries or []),
     )
 
 
@@ -110,6 +150,7 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
             a_raw=rec.raw_total_value or '(blank)',
             b_val=None,
             b_raw=raw_parts,
+            entries=entries,
         )
 
     summed_b = sum((e.value for e in entries if e.value is not None), Decimal('0.00'))
@@ -122,6 +163,7 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
                     detail=f'System A has {rec.location_id_raw}, System B {entry.entry_id} has {entry.location_id_raw}.',
                     b_val=summed_b,
                     b_raw=f'{summed_b:.2f}',
+                    entries=entries,
                 )
             if rec.event_date != entry.recorded_on:
                 return _for_record(
@@ -131,6 +173,7 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
                     a_raw=f'{rec.raw_total_value} ({rec.raw_event_date})',
                     b_val=summed_b,
                     b_raw=f'{summed_b:.2f} ({entry.raw_recorded_on})',
+                    entries=entries,
                 )
         return None
 
@@ -145,17 +188,19 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
             detail=f'Entered {len(entries)} times in System B ({raw_parts}).',
             b_val=summed_b,
             b_raw=raw_parts,
+            entries=entries,
         )
 
     return _for_record(
         rec,
-        reason='VALUE_MISMATCH',
+        reason='MULTI_ENTRY_UNRESOLVED',
         detail=(
-            f'System A total ({_fmt_dec(rec.total_value)}) differs from System B '
-            f'{len(entries)}-entry sum ({_fmt_dec(summed_b)}: {raw_parts}).'
+            f'Multiple System B entries sum to {_fmt_dec(summed_b)} vs System A total '
+            f'({_fmt_dec(rec.total_value)}); relationship unresolved ({raw_parts}).'
         ),
         b_val=summed_b,
         b_raw=raw_parts,
+        entries=entries,
     )
 
 
@@ -202,6 +247,7 @@ def _reconcile_record(
             a_raw=f'{rec.raw_total_value} (VOIDED)',
             b_val=b_val,
             b_raw=b_raw,
+            entries=entries,
         )
 
     if len(entries) > 1:
@@ -223,6 +269,7 @@ def _reconcile_record(
             a_raw=rec.raw_total_value or '(blank)',
             b_val=entry.value,
             b_raw=entry.raw_value or '(blank)',
+            entries=entries,
         )
 
     if rec.total_value != entry.value:
@@ -232,6 +279,7 @@ def _reconcile_record(
             detail=_format_value_mismatch_detail(rec, entry),
             b_val=entry.value,
             b_raw=entry.raw_value,
+            entries=entries,
         )
 
     if rec.location_id_raw != entry.location_id_raw:
@@ -241,6 +289,7 @@ def _reconcile_record(
             detail=f'System A has {rec.location_id_raw}, System B has {entry.location_id_raw}.',
             b_val=entry.value,
             b_raw=entry.raw_value,
+            entries=entries,
         )
 
     raw_date_mismatch = (
@@ -256,6 +305,7 @@ def _reconcile_record(
             a_raw=f'{rec.raw_total_value} ({rec.raw_event_date or "(blank)"})',
             b_val=entry.value,
             b_raw=f'{entry.raw_value} ({entry.raw_recorded_on or "(blank)"})',
+            entries=entries,
         )
 
     return None
@@ -269,6 +319,7 @@ def _reconcile_orphan_entries(
     rows: list[Disagreement] = []
     for entry in entries:
         loc_id, loc_name = _location_meta(entry)
+        prov = _entry_provenance([entry])
         if in_other_org:
             rows.append(
                 _build_disagreement(
@@ -281,6 +332,8 @@ def _reconcile_orphan_entries(
                     a_raw='Redacted (other org)',
                     b_val=entry.value,
                     b_raw=entry.raw_value or '(blank)',
+                    b_date=entry.raw_recorded_on or None,
+                    b_rows=prov,
                 )
             )
         else:
@@ -295,6 +348,8 @@ def _reconcile_orphan_entries(
                     a_raw='-',
                     b_val=entry.value,
                     b_raw=entry.raw_value or '(blank)',
+                    b_date=entry.raw_recorded_on or None,
+                    b_rows=prov,
                 )
             )
     return rows

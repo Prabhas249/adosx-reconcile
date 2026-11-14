@@ -130,6 +130,7 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
                     'raw_total_value': row.get('total_value') or '',
                     'value_parse_error': total_err,
                     'state': (row.get('state') or 'CONFIRMED').strip().upper(),
+                    'source_row': row_num,
                 },
             )
             if created:
@@ -179,6 +180,7 @@ def _load_system_b(path: Path, locations_by_id: dict[str, Location], issues: lis
                     'raw_value': row.get('value') or '',
                     'value_parse_error': val_err,
                     'label': (row.get('label') or '').strip(),
+                    'source_row': row_num,
                 },
             )
             if created:

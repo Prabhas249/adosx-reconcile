@@ -4,6 +4,13 @@ import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
+interface ProvenanceEntry {
+  entry_id: string;
+  row: number | null;
+  raw_value: string;
+  recorded_on: string | null;
+}
+
 interface Disagreement {
   record_id: string;
   reason: string;
@@ -15,7 +22,13 @@ interface Disagreement {
   system_a_raw: string;
   system_b_value: string | null;
   system_b_raw: string;
-  sort_value: number;
+  sort_value: string;
+  system_a_base_value: string | null;
+  system_a_adjustment: string | null;
+  system_a_date: string | null;
+  system_a_row: number | null;
+  system_b_date: string | null;
+  system_b_rows: ProvenanceEntry[];
 }
 
 interface ReasonOption {
@@ -36,6 +49,16 @@ type TagTone =
 
 type SegmentTone = 'auto' | 'danger' | 'warning' | 'success';
 
+type SortKey =
+  | 'value_desc'
+  | 'value_asc'
+  | 'id_asc'
+  | 'id_desc'
+  | 'sys_a_desc'
+  | 'sys_a_asc'
+  | 'sys_b_desc'
+  | 'sys_b_asc';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
 const THEME_KEY = 'adosx-theme';
 
@@ -44,7 +67,7 @@ function getReasonTone(reason: string): TagTone {
   if (reason === 'MISSING_IN_B') return 'amber';
   if (reason === 'ORPHAN_IN_B') return 'orange';
   if (reason === 'VALUE_MISMATCH') return 'blue';
-  if (reason === 'DUPLICATE_IN_B') return 'purple';
+  if (reason === 'DUPLICATE_IN_B' || reason === 'MULTI_ENTRY_UNRESOLVED') return 'purple';
   if (reason === 'UNPARSEABLE_VALUE') return 'yellow';
   return 'neutral';
 }
@@ -60,7 +83,11 @@ function getSecondaryTag(row: Disagreement): { label: string; tone: TagTone } {
     return { label: 'Active in B', tone: 'amber' };
   }
   if (row.reason === 'DUPLICATE_IN_B') {
-    return { label: '2x in B', tone: 'blue' };
+    const count = Math.max(2, row.system_b_rows.length);
+    return { label: `${count}x in B`, tone: 'blue' };
+  }
+  if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
+    return { label: `${row.system_b_rows.length} entries`, tone: 'amber' };
   }
   if (row.reason === 'MISSING_IN_B') {
     return { label: 'System A only', tone: 'moss' };
@@ -84,26 +111,30 @@ function getAuditSteps(row: Disagreement, org: string): string[] {
   );
   if (row.detail.includes('base_value')) {
     steps.push(
-      'System B value equals System A base_value without the adjustment column (which equals 28% of base_value across system_a.csv).',
+      'System B value equals System A base_value without the adjustment column (system_a.csv adjustment equals 28% of base_value).',
     );
   } else if (row.reason === 'DUPLICATE_IN_B') {
     steps.push(
-      'Multiple System B entries repeat the full expected amount under the same normalized record reference.',
+      'Multiple System B entries normalize to the same record reference and repeat the posted amount.',
+    );
+  } else if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
+    steps.push(
+      'Multiple System B entries normalize to the same record reference, but their combined sum differs from System A total_value.',
     );
   } else if (row.reason === 'TENANT_MISMATCH') {
     steps.push(
-      'System B holds a matching reference under a foreign tenant; server redacted foreign org ID and values.',
+      'A matching normalized reference exists under another organization; foreign identifiers and amounts were redacted on the server.',
     );
   } else if (row.reason === 'VOIDED_IN_A') {
     steps.push(
-      'Record is marked VOIDED in System A but remains active with a posted amount in System B.',
+      'Record state is VOIDED in System A while System B still holds an active entry.',
     );
   } else if (row.reason === 'MISSING_IN_B') {
-    steps.push('Active System A record has zero corresponding entries in System B.');
+    steps.push('System A record has zero matching entries in System B for this organization.');
   } else if (row.reason === 'ORPHAN_IN_B') {
     steps.push('System B entry references a record ID that does not exist in System A.');
   } else if (row.reason === 'UNPARSEABLE_VALUE') {
-    steps.push('Raw value string in CSV could not be parsed into a valid decimal amount.');
+    steps.push('Original CSV value cell was preserved with value_parse_error=True instead of being dropped.');
   } else {
     steps.push(row.detail);
   }
@@ -187,6 +218,46 @@ function ChevronDownIcon() {
   );
 }
 
+function SortIndicator({ dir }: { dir: 'asc' | 'desc' | null }) {
+  return (
+    <svg
+      className="th-sort-icon"
+      data-active={dir ? 'true' : 'false'}
+      width="11"
+      height="11"
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+    >
+      {dir === 'asc' ? (
+        <path
+          d="M8 12.5V3.5M4.5 7 8 3.5 11.5 7"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : dir === 'desc' ? (
+        <path
+          d="M8 3.5v9M4.5 9 8 12.5 11.5 9"
+          stroke="currentColor"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      ) : (
+        <path
+          d="M5.5 6 8 3.5 10.5 6M5.5 10 8 12.5 10.5 10"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      )}
+    </svg>
+  );
+}
+
 function SearchIcon() {
   return (
     <svg
@@ -222,14 +293,15 @@ function ShareExportIcon() {
   );
 }
 
-function PlusSparkIcon() {
+function RefreshIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path
-        d="M8 3.25v9.5M3.25 8h9.5"
+        d="M13.25 8a5.25 5.25 0 1 1-1.3-3.46M13.25 2.5v2.75H10.5"
         stroke="currentColor"
-        strokeWidth="1.6"
+        strokeWidth="1.5"
         strokeLinecap="round"
+        strokeLinejoin="round"
       />
     </svg>
   );
@@ -272,16 +344,19 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
 
   if (topic === 'why') {
     if (row.detail.includes('base_value')) {
-      return `System B's recorded value (${bFormatted}) matches System A's base_value, while System A's total_value (${aFormatted}) is higher by ₹${formatMoney(diff)} (28% of base_value). This is consistent with an omitted adjustment (such as a 28% GST slab), though the CSV exports alone do not establish the upstream cause.`;
+      return `System B's recorded value (${bFormatted}) matches System A's base_value, while System A's total_value (${aFormatted}) includes an adjustment of ₹${formatMoney(diff)} (28% of base_value). The CSV exports show the exact difference but do not specify which system is authoritative.`;
     }
     if (row.reason === 'DUPLICATE_IN_B') {
-      return `System B contains two separate entries for ${row.record_id} that each carry ${aFormatted} (summing to ${bFormatted}), unlike REC-1055 where two partial entries sum to System A's total.`;
+      return `System B contains ${row.system_b_rows.length || 2} entries for ${row.record_id} that repeat ${aFormatted} (summing to ${bFormatted}), unlike REC-1055 where two distinct partial amounts sum to System A's total.`;
+    }
+    if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
+      return `System B contains ${row.system_b_rows.length} entries summing to ${bFormatted} against System A's ${aFormatted}; because the partial sum neither matches total_value nor repeats an identical posting, the relationship is flagged as unresolved.`;
     }
     if (row.reason === 'TENANT_MISMATCH') {
-      return `${row.record_id} is recorded at ${row.location_name} (${row.location_id}) in ${org}, while a matching normalized reference exists under a location mapped to another organization.`;
+      return `${row.record_id} is mapped to ${row.location_name} (${row.location_id}) in ${org}, while a matching normalized reference exists under a location belonging to another organization.`;
     }
     if (row.reason === 'VOIDED_IN_A') {
-      return `${row.record_id} has state VOIDED in System A, while System B holds an active entry for ${bFormatted}.`;
+      return `${row.record_id} has state VOIDED in System A, while System B still holds an active entry for ${bFormatted}.`;
     }
     if (row.reason === 'UNPARSEABLE_VALUE') {
       return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || 'blank'}).`;
@@ -290,42 +365,46 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
   }
 
   if (topic === 'math') {
-    if (row.detail.includes('base_value') && bNum > 0) {
-      const adj = aNum - bNum;
-      return `System A base_value: ₹${formatMoney(bNum)} | System A adjustment (+28%): ₹${formatMoney(adj)} | System A total_value: ₹${formatMoney(aNum)} | Net delta vs System B: ₹${formatMoney(diff)}.`;
+    if (row.system_a_base_value !== null && row.system_a_adjustment !== null) {
+      const baseFmt = `₹${formatMoney(Number(row.system_a_base_value))}`;
+      const adjFmt = `₹${formatMoney(Number(row.system_a_adjustment))}`;
+      return `System A base_value: ${baseFmt} + adjustment: ${adjFmt} = total_value: ${aFormatted} | System B: ${bFormatted} | Absolute variance: ₹${formatMoney(diff)}.`;
     }
-    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute net delta: ₹${formatMoney(diff)} | Sort magnitude: ₹${formatMoney(row.sort_value)}.`;
+    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute variance: ₹${formatMoney(diff)} | Sort magnitude: ₹${formatMoney(Number(row.sort_value))}.`;
   }
 
   if (topic === 'tenant') {
     if (row.reason === 'TENANT_MISMATCH') {
-      return `Strict isolation active: comparator.py verified membership via values_list('normalized_record_ref', flat=True) with location__isnull=False and redacted the foreign org ID, location name, and rupee amount before serialization.`;
+      return `Isolation active: comparator.py checked cross-org IDs via values_list('normalized_record_ref', flat=True) with location__isnull=False and redacted foreign org IDs, row numbers, locations, and amounts before serialization.`;
     }
-    return `Scoped strictly to ${org} (${row.location_id} - ${row.location_name}) via .filter(location__org_id='${org}'). Zero cross-tenant fields accessed.`;
+    return `Scoped to ${org} (${row.location_id} - ${row.location_name}) via .filter(location__org_id='${org}'). In production, ?org= would be replaced by an authenticated tenant session.`;
   }
 
   if (row.detail.includes('base_value')) {
-    return `Verify the adjustment rule and source voucher for ${row.record_id} at ${row.location_id} before deciding whether System B needs an adjustment entry or System A's adjustment should be revised.`;
+    return `Verify the source documentation for ${row.record_id} at ${row.location_id} to confirm whether the adjustment should be included or excluded before updating either system.`;
   }
   if (row.reason === 'DUPLICATE_IN_B') {
-    return `Inspect both System B vouchers (${row.system_b_raw}) against source receipts to confirm whether one is an accidental duplicate posting before reversing.`;
+    return `Inspect both System B source entries (${row.system_b_raw}) against source records to confirm whether one posting is an unintended duplicate before taking action.`;
+  }
+  if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
+    return `Verify whether additional split entries for ${row.record_id} are missing from System B or whether one of the partial postings is inaccurate.`;
   }
   if (row.reason === 'VOIDED_IN_A') {
-    return `Confirm whether ${row.record_id} was validly voided in System A or whether System B still reflects a live transaction that was voided in error.`;
+    return `Confirm whether ${row.record_id} was intentionally voided in System A or whether System B's active entry should be updated.`;
   }
   if (row.reason === 'MISSING_IN_B') {
-    return `Check whether ${row.record_id} (${aFormatted}) is pending ingestion into System B or was recorded in System A without a backing ledger event.`;
+    return `Check whether ${row.record_id} (${aFormatted}) failed to export to System B or was recorded in System A in error.`;
   }
   if (row.reason === 'ORPHAN_IN_B') {
-    return `Audit System B entry (${row.system_b_raw}) to determine whether its record_ref was mistyped or whether a corresponding System A record is missing.`;
+    return `Inspect System B entry (${row.system_b_raw}) to check whether its record_ref was mistyped or whether the corresponding System A row is missing.`;
   }
   if (row.reason === 'DATE_MISMATCH') {
-    return `Compare the event timestamp in System A against the posting date in System B to verify whether ${row.record_id} crossed a month-end cutoff.`;
+    return `Compare the event timestamp in System A (${row.system_a_date || 'unknown'}) against System B (${row.system_b_date || 'unknown'}) to confirm whether ${row.record_id} crossed a period boundary.`;
   }
   if (row.reason === 'TENANT_MISMATCH') {
-    return `Review the location assignment on both sides of ${row.record_id} with an administrator authorized across organizations (assuming record_id is globally unique).`;
+    return `Escalate ${row.record_id} to an administrator authorized across organizations to verify location ownership (cross-org matching assumes record_id is globally unique).`;
   }
-  return `Compare source documentation for both systems before adjusting ${row.record_id} (neither system is assumed authoritative).`;
+  return `Compare source records for both systems before modifying ${row.record_id} (neither system is treated as authoritative).`;
 }
 
 function CopyIdButton({ value }: { value: string }) {
@@ -386,6 +465,8 @@ function ValueCell({
   const showRaw = Boolean(raw) && raw !== parsed && !(parsed === null && raw === '-');
   const formatted =
     parsed !== null && !Number.isNaN(Number(parsed)) ? formatMoney(Number(parsed)) : parsed;
+  const rawParts = showRaw ? raw.split(' + ').map((part) => part.trim()) : [];
+
   return (
     <td className="num tabular" data-label={label}>
       <div className="val-wrap">
@@ -397,7 +478,15 @@ function ValueCell({
         ) : (
           <span className="val-parsed val-missing">-</span>
         )}
-        {showRaw && <span className="val-raw mono">raw: {raw}</span>}
+        {showRaw && (
+          <div className="val-raw mono">
+            {rawParts.map((part, idx) => (
+              <span key={idx} className="val-raw-line">
+                {idx === 0 ? `raw: ${part}` : `+ ${part}`}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
     </td>
   );
@@ -408,9 +497,12 @@ export default function DisagreementsPage() {
   const [reasons, setReasons] = useState<ReasonOption[]>([]);
   const [selectedOrg, setSelectedOrg] = useState<string>('');
   const [selectedReason, setSelectedReason] = useState<string>('');
-  const [sortOrder, setSortOrder] = useState<string>('value_desc');
+  const [sortOrder, setSortOrder] = useState<SortKey>('value_desc');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [rows, setRows] = useState<Disagreement[]>([]);
+  const [orgTotalCount, setOrgTotalCount] = useState<number>(0);
+  const [orgMaxSortValue, setOrgMaxSortValue] = useState<number>(0);
+  const [orgReasonCounts, setOrgReasonCounts] = useState<Record<string, number>>({});
   const [hasLoadedRows, setHasLoadedRows] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -532,6 +624,9 @@ export default function DisagreementsPage() {
     return () => controller.abort();
   }, [reloadKey]);
 
+  const backendSort =
+    sortOrder === 'value_desc' || sortOrder === 'value_asc' ? sortOrder : '';
+
   useEffect(() => {
     if (!selectedOrg) return;
     const controller = new AbortController();
@@ -541,7 +636,7 @@ export default function DisagreementsPage() {
 
     const params = new URLSearchParams({ org: selectedOrg });
     if (selectedReason) params.set('reason', selectedReason);
-    if (sortOrder) params.set('sort', sortOrder);
+    if (backendSort) params.set('sort', backendSort);
 
     fetch(`${API_BASE}/disagreements/?${params.toString()}`, { signal: controller.signal })
       .then((res) => {
@@ -549,7 +644,17 @@ export default function DisagreementsPage() {
         return res.json();
       })
       .then((data) => {
-        setRows(data.disagreements || []);
+        const fetched: Disagreement[] = data.disagreements || [];
+        setRows(fetched);
+        setOrgTotalCount(
+          typeof data.total_org_count === 'number' ? data.total_org_count : fetched.length,
+        );
+        setOrgMaxSortValue(
+          data.org_max_sort_value ? Number(data.org_max_sort_value) : 0,
+        );
+        setOrgReasonCounts(
+          data.reason_counts && typeof data.reason_counts === 'object' ? data.reason_counts : {},
+        );
         setHasLoadedRows(true);
         setRenderBatch((n) => n + 1);
       })
@@ -566,7 +671,7 @@ export default function DisagreementsPage() {
       });
 
     return () => controller.abort();
-  }, [selectedOrg, selectedReason, sortOrder, reloadKey]);
+  }, [selectedOrg, selectedReason, backendSort, reloadKey]);
 
   useEffect(() => {
     if (!activeRow && !kbOpen) return;
@@ -601,27 +706,51 @@ export default function DisagreementsPage() {
 
   const visibleRows = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (r) =>
-        r.record_id.toLowerCase().includes(q) ||
-        r.location_id.toLowerCase().includes(q) ||
-        r.location_name.toLowerCase().includes(q) ||
-        r.reason_label.toLowerCase().includes(q) ||
-        r.detail.toLowerCase().includes(q),
-    );
-  }, [rows, searchQuery]);
+    const filtered = q
+      ? rows.filter(
+          (r) =>
+            r.record_id.toLowerCase().includes(q) ||
+            r.location_id.toLowerCase().includes(q) ||
+            r.location_name.toLowerCase().includes(q) ||
+            r.reason_label.toLowerCase().includes(q) ||
+            r.detail.toLowerCase().includes(q),
+        )
+      : [...rows];
+
+    if (sortOrder === 'id_asc') {
+      filtered.sort((a, b) => a.record_id.localeCompare(b.record_id));
+    } else if (sortOrder === 'id_desc') {
+      filtered.sort((a, b) => b.record_id.localeCompare(a.record_id));
+    } else if (sortOrder === 'sys_a_desc' || sortOrder === 'sys_a_asc') {
+      const dir = sortOrder === 'sys_a_desc' ? -1 : 1;
+      filtered.sort((a, b) => {
+        const av = a.system_a_value !== null ? Number(a.system_a_value) : -1;
+        const bv = b.system_a_value !== null ? Number(b.system_a_value) : -1;
+        if (av !== bv) return (av - bv) * dir;
+        return a.record_id.localeCompare(b.record_id);
+      });
+    } else if (sortOrder === 'sys_b_desc' || sortOrder === 'sys_b_asc') {
+      const dir = sortOrder === 'sys_b_desc' ? -1 : 1;
+      filtered.sort((a, b) => {
+        const av = a.system_b_value !== null ? Number(a.system_b_value) : -1;
+        const bv = b.system_b_value !== null ? Number(b.system_b_value) : -1;
+        if (av !== bv) return (av - bv) * dir;
+        return a.record_id.localeCompare(b.record_id);
+      });
+    }
+
+    return filtered;
+  }, [rows, searchQuery, sortOrder]);
 
   const metrics = useMemo(() => {
-    const total = visibleRows.length;
-    const denom = Math.max(1, total);
-    const valueCount = visibleRows.filter((r) => r.reason === 'VALUE_MISMATCH').length;
-    const missingCount = visibleRows.filter((r) => r.reason === 'MISSING_IN_B').length;
-    const tenantCount = visibleRows.filter((r) => r.reason === 'TENANT_MISMATCH').length;
+    const orgDenom = Math.max(1, orgTotalCount);
+    const valueCount = orgReasonCounts.VALUE_MISMATCH || 0;
+    const missingCount = orgReasonCounts.MISSING_IN_B || 0;
+    const tenantCount = orgReasonCounts.TENANT_MISMATCH || 0;
 
     let sumA = 0;
     let sumB = 0;
-    let maxExposure = 0;
+    let viewMax = 0;
     for (const r of visibleRows) {
       if (r.system_a_value !== null) {
         const parsedA = Number(r.system_a_value);
@@ -631,25 +760,39 @@ export default function DisagreementsPage() {
         const parsedB = Number(r.system_b_value);
         if (!Number.isNaN(parsedB)) sumB += parsedB;
       }
-      if (r.sort_value > maxExposure) maxExposure = r.sort_value;
+      const sv = Number(r.sort_value);
+      if (!Number.isNaN(sv) && sv > viewMax) viewMax = sv;
     }
 
     return {
-      total,
+      orgTotal: orgTotalCount,
       valueCount,
       missingCount,
       tenantCount,
-      valuePct: (valueCount / denom) * 100,
-      missingPct: (missingCount / denom) * 100,
-      tenantPct: (tenantCount / denom) * 100,
+      valuePct: (valueCount / orgDenom) * 100,
+      missingPct: (missingCount / orgDenom) * 100,
+      tenantPct: (tenantCount / orgDenom) * 100,
       sumA,
       sumB,
-      maxExposure,
+      viewMax,
+      magnitudeDenominator: orgMaxSortValue > 0 ? orgMaxSortValue : viewMax,
     };
-  }, [visibleRows]);
+  }, [visibleRows, orgTotalCount, orgMaxSortValue, orgReasonCounts]);
 
   const selectedOrgIndex = Math.max(0, orgs.indexOf(selectedOrg));
   const hasFilters = Boolean(selectedReason || searchQuery.trim() || sortOrder !== 'value_desc');
+
+  const toggleHeaderSort = (column: 'id' | 'sys_a' | 'sys_b' | 'magnitude') => {
+    if (column === 'id') {
+      setSortOrder((prev) => (prev === 'id_asc' ? 'id_desc' : 'id_asc'));
+    } else if (column === 'sys_a') {
+      setSortOrder((prev) => (prev === 'sys_a_desc' ? 'sys_a_asc' : 'sys_a_desc'));
+    } else if (column === 'sys_b') {
+      setSortOrder((prev) => (prev === 'sys_b_desc' ? 'sys_b_asc' : 'sys_b_desc'));
+    } else {
+      setSortOrder((prev) => (prev === 'value_desc' ? 'value_asc' : 'value_desc'));
+    }
+  };
 
   const openInspector = (row: Disagreement, trigger: HTMLElement) => {
     lastTriggerRef.current = trigger;
@@ -690,6 +833,7 @@ export default function DisagreementsPage() {
       'location_name',
       'reason',
       'reason_label',
+      'system_a_row',
       'system_a_value',
       'system_a_raw',
       'system_b_value',
@@ -706,6 +850,7 @@ export default function DisagreementsPage() {
           r.location_name,
           r.reason,
           r.reason_label,
+          r.system_a_row,
           r.system_a_value,
           r.system_a_raw,
           r.system_b_value,
@@ -836,14 +981,14 @@ export default function DisagreementsPage() {
             onClick={() => setSelectedReason('')}
           >
             <div className="kpi-top">
-              <span className="kpi-label">Visible Disagreements</span>
+              <span className="kpi-label">Org Disagreements</span>
               <span className="crm-tag crm-tag-sm" data-tone="green">
                 All reasons
               </span>
             </div>
             <div className="kpi-bottom">
-              <span className="kpi-value tabular">{metrics.total}</span>
-              <SegmentBar percent={metrics.total > 0 ? 84 : 0} tone="auto" />
+              <span className="kpi-value tabular">{metrics.orgTotal}</span>
+              <SegmentBar percent={metrics.orgTotal > 0 ? 84 : 0} tone="auto" />
             </div>
           </button>
 
@@ -915,11 +1060,16 @@ export default function DisagreementsPage() {
                   name="sort"
                   className="filter-pill-select"
                   value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value)}
+                  onChange={(e) => setSortOrder(e.target.value as SortKey)}
                 >
                   <option value="value_desc">Highest Value</option>
                   <option value="value_asc">Lowest Value</option>
-                  <option value="">Record ID (A-Z)</option>
+                  <option value="id_asc">Record ID (A-Z)</option>
+                  <option value="id_desc">Record ID (Z-A)</option>
+                  <option value="sys_a_desc">System A (High-Low)</option>
+                  <option value="sys_a_asc">System A (Low-High)</option>
+                  <option value="sys_b_desc">System B (High-Low)</option>
+                  <option value="sys_b_asc">System B (Low-High)</option>
                 </select>
                 <ChevronDownIcon />
               </div>
@@ -1012,8 +1162,8 @@ export default function DisagreementsPage() {
               className="crm-btn crm-btn-primary"
               onClick={() => setReloadKey((k) => k + 1)}
             >
-              <PlusSparkIcon />
-              <span>Re-sync Ledger</span>
+              <RefreshIcon />
+              <span>Refresh Data</span>
             </button>
           </div>
         </section>
@@ -1066,12 +1216,84 @@ export default function DisagreementsPage() {
               <table className="crm-table">
                 <thead>
                   <tr>
-                    <th>Record ID</th>
+                    <th>
+                      <button
+                        type="button"
+                        className="th-sort-btn"
+                        data-active={sortOrder === 'id_asc' || sortOrder === 'id_desc' ? 'true' : 'false'}
+                        onClick={() => toggleHeaderSort('id')}
+                      >
+                        <span>Record ID</span>
+                        <SortIndicator
+                          dir={sortOrder === 'id_asc' ? 'asc' : sortOrder === 'id_desc' ? 'desc' : null}
+                        />
+                      </button>
+                    </th>
                     <th>Location</th>
                     <th>Reason &amp; Stage</th>
-                    <th className="num">System A Value</th>
-                    <th className="num">System B Value</th>
-                    <th className="num">Relative Magnitude</th>
+                    <th className="num">
+                      <button
+                        type="button"
+                        className="th-sort-btn th-sort-btn-num"
+                        data-active={
+                          sortOrder === 'sys_a_asc' || sortOrder === 'sys_a_desc' ? 'true' : 'false'
+                        }
+                        onClick={() => toggleHeaderSort('sys_a')}
+                      >
+                        <span>System A Value</span>
+                        <SortIndicator
+                          dir={
+                            sortOrder === 'sys_a_asc'
+                              ? 'asc'
+                              : sortOrder === 'sys_a_desc'
+                                ? 'desc'
+                                : null
+                          }
+                        />
+                      </button>
+                    </th>
+                    <th className="num">
+                      <button
+                        type="button"
+                        className="th-sort-btn th-sort-btn-num"
+                        data-active={
+                          sortOrder === 'sys_b_asc' || sortOrder === 'sys_b_desc' ? 'true' : 'false'
+                        }
+                        onClick={() => toggleHeaderSort('sys_b')}
+                      >
+                        <span>System B Value</span>
+                        <SortIndicator
+                          dir={
+                            sortOrder === 'sys_b_asc'
+                              ? 'asc'
+                              : sortOrder === 'sys_b_desc'
+                                ? 'desc'
+                                : null
+                          }
+                        />
+                      </button>
+                    </th>
+                    <th className="num">
+                      <button
+                        type="button"
+                        className="th-sort-btn th-sort-btn-num"
+                        data-active={
+                          sortOrder === 'value_desc' || sortOrder === 'value_asc' ? 'true' : 'false'
+                        }
+                        onClick={() => toggleHeaderSort('magnitude')}
+                      >
+                        <span>Relative Magnitude</span>
+                        <SortIndicator
+                          dir={
+                            sortOrder === 'value_asc'
+                              ? 'asc'
+                              : sortOrder === 'value_desc'
+                                ? 'desc'
+                                : null
+                          }
+                        />
+                      </button>
+                    </th>
                     <th>Diagnostic Detail</th>
                   </tr>
                 </thead>
@@ -1083,9 +1305,13 @@ export default function DisagreementsPage() {
                     const isSelected =
                       activeRow?.record_id === row.record_id && activeRow?.reason === row.reason;
                     const delay = Math.min(idx, 8) * 24;
+                    const rowSortNum = Number(row.sort_value) || 0;
                     const exposurePct =
-                      metrics.maxExposure > 0
-                        ? Math.max(8, Math.round((row.sort_value / metrics.maxExposure) * 100))
+                      metrics.magnitudeDenominator > 0
+                        ? Math.max(
+                            rowSortNum > 0 ? 8 : 0,
+                            Math.round((rowSortNum / metrics.magnitudeDenominator) * 100),
+                          )
                         : 0;
 
                     return (
@@ -1167,7 +1393,9 @@ export default function DisagreementsPage() {
           <footer className="table-footer" role="status" aria-live="polite">
             <div className="footer-cell tabular">
               <strong>{visibleRows.length}</strong>
-              <span>Disagreement{visibleRows.length === 1 ? '' : 's'} in view</span>
+              <span>
+                of {metrics.orgTotal} Disagreement{metrics.orgTotal === 1 ? '' : 's'}
+              </span>
             </div>
             <div className="footer-cell tabular">
               <span>+ Sum of System A</span>
@@ -1178,8 +1406,8 @@ export default function DisagreementsPage() {
               <strong>₹{formatMoney(metrics.sumB)}</strong>
             </div>
             <div className="footer-cell tabular">
-              <span>+ Max Row Magnitude</span>
-              <strong>₹{formatMoney(metrics.maxExposure)}</strong>
+              <span>+ Org Max Magnitude</span>
+              <strong>₹{formatMoney(metrics.magnitudeDenominator)}</strong>
             </div>
           </footer>
         </section>
@@ -1260,7 +1488,63 @@ export default function DisagreementsPage() {
               </div>
 
               <div className="sheet-box">
-                <span className="sheet-box-label">Interactive Audit Q&amp;A</span>
+                <span className="sheet-box-label">Source Provenance &amp; Evidence</span>
+                <div className="evidence-grid">
+                  <div className="evidence-row">
+                    <span className="evidence-key">System A Source</span>
+                    <span className="evidence-val mono">
+                      {activeRow.system_a_row !== null
+                        ? `system_a.csv row #${activeRow.system_a_row}${activeRow.system_a_date ? ` (${activeRow.system_a_date})` : ''}`
+                        : activeRow.reason === 'TENANT_MISMATCH'
+                          ? 'Redacted (other org)'
+                          : 'Not present in system_a.csv'}
+                    </span>
+                  </div>
+                  <div className="evidence-row">
+                    <span className="evidence-key">System B Source</span>
+                    <span className="evidence-val mono">
+                      {activeRow.system_b_rows.length > 0
+                        ? activeRow.system_b_rows
+                            .map((entry) =>
+                              `${entry.entry_id}${entry.row !== null ? ` (row #${entry.row})` : ''}`,
+                            )
+                            .join(', ')
+                        : activeRow.reason === 'TENANT_MISMATCH'
+                          ? 'Redacted (other org)'
+                          : 'No entry in system_b.csv'}
+                    </span>
+                  </div>
+                  {activeRow.system_a_base_value !== null && activeRow.system_a_adjustment !== null && (
+                    <div className="evidence-row">
+                      <span className="evidence-key">System A Breakdown</span>
+                      <span className="evidence-val tabular">
+                        ₹{formatMoney(Number(activeRow.system_a_base_value))} + ₹
+                        {formatMoney(Number(activeRow.system_a_adjustment))}
+                      </span>
+                    </div>
+                  )}
+                  <div className="evidence-row">
+                    <span className="evidence-key">Absolute Variance</span>
+                    <span className="evidence-val tabular">
+                      {activeRow.system_a_value !== null && activeRow.system_b_value !== null
+                        ? `₹${formatMoney(
+                            Math.abs(
+                              Number(activeRow.system_a_value) - Number(activeRow.system_b_value),
+                            ),
+                          )}`
+                        : '-'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="sheet-box">
+                <div className="sheet-box-head">
+                  <span className="sheet-box-label">Rule-Based Audit Q&amp;A</span>
+                  <span className="crm-tag crm-tag-sm" data-tone="neutral">
+                    Deterministic
+                  </span>
+                </div>
                 <div className="kb-chip-row" role="tablist" aria-label="Audit questions">
                   <button
                     type="button"
@@ -1280,7 +1564,7 @@ export default function DisagreementsPage() {
                     data-active={copilotTopic === 'math' ? 'true' : 'false'}
                     onClick={() => setCopilotTopic('math')}
                   >
-                    Value &amp; Adjustment Math
+                    Amount &amp; Adjustment Math
                   </button>
                   <button
                     type="button"
@@ -1324,15 +1608,15 @@ export default function DisagreementsPage() {
                 </span>
                 <span className="sheet-box-raw">
                   {activeRow.reason === 'TENANT_MISMATCH'
-                    ? 'Foreign organization identifiers and values are redacted on the server before leaving Django.'
-                    : `Scoped strictly to ${selectedOrg} with zero cross-tenant leakage.`}
+                    ? 'Foreign organization identifiers, row numbers, and amounts are redacted on the server before leaving Django.'
+                    : `Scoped to ${selectedOrg} via ?org= (prototype boundary; production requires authenticated tenant context).`}
                 </span>
               </div>
             </div>
 
             <div className="sheet-footer">
               <span className="sheet-footer-note mono tabular">
-                sort_value: ₹{formatMoney(activeRow.sort_value)}
+                sort_value: ₹{formatMoney(Number(activeRow.sort_value))}
               </span>
               <button
                 type="button"
@@ -1363,10 +1647,10 @@ export default function DisagreementsPage() {
             <div className="sheet-header">
               <div className="sheet-header-left">
                 <h2 id="kb-title" className="sheet-title">
-                  System &amp; Domain Knowledge Base
+                  System &amp; Data Knowledge Base
                 </h2>
                 <span className="crm-tag crm-tag-sm" data-tone="green">
-                  INR ₹ Audit Notes
+                  CSV-Grounded Notes
                 </span>
               </div>
               <button
@@ -1389,7 +1673,7 @@ export default function DisagreementsPage() {
                   data-active={kbTab === 'domain' ? 'true' : 'false'}
                   onClick={() => setKbTab('domain')}
                 >
-                  Data &amp; Domain Notes
+                  Source Data Notes
                 </button>
                 <button
                   type="button"
@@ -1399,7 +1683,7 @@ export default function DisagreementsPage() {
                   data-active={kbTab === 'non_errors' ? 'true' : 'false'}
                   onClick={() => setKbTab('non_errors')}
                 >
-                  4 Non-Error Traps
+                  4 Non-Error Cases
                 </button>
                 <button
                   type="button"
@@ -1416,14 +1700,14 @@ export default function DisagreementsPage() {
               {kbTab === 'domain' && (
                 <>
                   <div className="sheet-box">
-                    <span className="sheet-box-label">1. Source Data Observations &amp; 28% Adjustment Pattern</span>
+                    <span className="sheet-box-label">1. Source CSV Structure &amp; Numeric Observations</span>
                     <p className="kb-answer-text">
                       Across all 120 rows in <code>system_a.csv</code>,{' '}
                       <code>adjustment = round(base_value * 0.28, 2)</code> and{' '}
-                      <code>total_value = base_value + adjustment</code>. In addition, <code>REC-1064</code> in{' '}
-                      <code>system_b.csv</code> uses Indian lakh comma grouping (<code>1,25,400.00</code>), confirming INR
-                      (<code>₹</code>) amounts. A 28% rate is consistent with a standard tax/GST adjustment slab, though
-                      the CSV files themselves only establish the numeric relationship.
+                      <code>total_value = base_value + adjustment</code>. In <code>system_b.csv</code>,{' '}
+                      <code>REC-1064</code> uses Indian lakh comma grouping (<code>1,25,400.00</code>), indicating
+                      INR (<code>₹</code>) amounts. The CSVs do not state which business rule the 28% adjustment
+                      represents, so the engine reports only the observed math.
                     </p>
                   </div>
 
@@ -1453,7 +1737,7 @@ export default function DisagreementsPage() {
                         are globally unique across exports, <code>comparator.py</code> checks cross-org membership on
                         unmatched references with <code>location__isnull=False</code> and returns{' '}
                         <code>Redacted (other org)</code> for <code>REC-1077</code> without exposing foreign org IDs,
-                        locations, or amounts.
+                        row numbers, locations, or amounts.
                       </li>
                     </ul>
                   </div>
@@ -1466,8 +1750,8 @@ export default function DisagreementsPage() {
                     <span className="sheet-box-label">Why 4 Messy CSV Rows Are Valid Matches (Not Flagged)</span>
                     <p className="kb-answer-text">
                       A naive string or row-count diff would flag 17 rows. Our ingestion and reconciliation pipeline
-                      normalizes formatting noise and recognizes split settlements so only the 13 true accounting
-                      disagreements surface:
+                      normalizes formatting noise and recognizes split settlements so only the 13 true discrepancies
+                      surface:
                     </p>
                   </div>
 

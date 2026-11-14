@@ -42,6 +42,7 @@ class SystemARecord(models.Model):
     value_parse_error = models.BooleanField(default=False)
 
     state = models.CharField(max_length=32, default='CONFIRMED')
+    source_row = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['record_id']
@@ -72,6 +73,7 @@ class SystemBEntry(models.Model):
     value_parse_error = models.BooleanField(default=False)
 
     label = models.CharField(max_length=255, blank=True, default='')
+    source_row = models.PositiveIntegerField(null=True, blank=True)
 
     class Meta:
         ordering = ['entry_id']
