@@ -107,7 +107,6 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
         all_parseable
         and rec.total_value is not None
         and summed_b == rec.total_value
-        and any('part ' in e.label.lower() for e in entries)
     )
     if is_valid_split:
         for entry in entries:
@@ -138,6 +137,16 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
         b_val=summed_b if all_parseable else None,
         b_raw=raw_parts,
     )
+
+
+def _format_value_mismatch_detail(rec: SystemARecord, entry: SystemBEntry) -> str:
+    detail = f'System A total ({_fmt_dec(rec.total_value)}) differs from System B ({_fmt_dec(entry.value)}).'
+    if rec.base_value is not None and entry.value == rec.base_value:
+        detail += (
+            f' System B matches System A base_value ({_fmt_dec(rec.base_value)}) '
+            f'without adjustment ({_fmt_dec(rec.adjustment)}).'
+        )
+    return detail
 
 
 def _reconcile_record(
@@ -200,7 +209,7 @@ def _reconcile_record(
         return _for_record(
             rec,
             reason='VALUE_MISMATCH',
-            detail=f'System A total ({_fmt_dec(rec.total_value)}) differs from System B ({_fmt_dec(entry.value)}).',
+            detail=_format_value_mismatch_detail(rec, entry),
             b_val=entry.value,
             b_raw=entry.raw_value,
         )

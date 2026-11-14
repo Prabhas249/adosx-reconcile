@@ -97,7 +97,7 @@ class ReconciliationTests(TestCase):
             entry_id='ENT/2026/4903',
             raw_ref='REC-1055',
             raw_value='107926.39',
-            label='Entry part 2 of 2',
+            label='Entry for CAT-08',
         )
         rows = find_disagreements('ORG-A')
         self.assertEqual(rows, [])
@@ -122,6 +122,17 @@ class ReconciliationTests(TestCase):
         self.assertEqual(rows[0]['reason'], 'VALUE_MISMATCH')
         self.assertEqual(rows[0]['system_b_value'], '125400.00')
         self.assertEqual(rows[0]['system_b_raw'], '1,25,400.00')
+
+    def test_value_mismatch_notes_when_system_b_matches_base_value(self):
+        rec = self._create_a(record_id='REC-1027', total='60516.70')
+        rec.base_value = Decimal('61921.12')
+        rec.adjustment = Decimal('-1404.42')
+        rec.save()
+        self._create_b(entry_id='ENT/2026/4027', raw_ref='REC-1027', raw_value='61921.12')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'VALUE_MISMATCH')
+        self.assertIn('base_value (61921.12)', rows[0]['detail'])
 
     def test_catches_blank_and_unparseable_value(self):
         self._create_a(record_id='REC-1050', total='160405.85')
@@ -229,7 +240,13 @@ class ReconciliationTests(TestCase):
     def test_api_endpoints_validation_filtering_and_full_csv_import(self):
         data_dir = Path(settings.BASE_DIR).parent / 'data'
         counts = import_csv_directory(data_dir, replace=True)
-        self.assertEqual(counts, {'locations': 5, 'system_a': 120, 'system_b': 121})
+        self.assertEqual(counts['locations'], 5)
+        self.assertEqual(counts['system_a'], 120)
+        self.assertEqual(counts['system_b'], 121)
+        self.assertEqual(
+            counts['issues'],
+            ["system_b.csv row 50 (ENT/2026/4050): unparseable value ''"],
+        )
 
         client = APIClient()
 
@@ -245,7 +262,18 @@ class ReconciliationTests(TestCase):
         resp_a = client.get('/api/disagreements/?org=ORG-A&sort=value_desc')
         self.assertEqual(resp_a.status_code, 200)
         payload_a = resp_a.json()
-        self.assertEqual(payload_a['count'], 7)
+        self.assertEqual(
+            {(r['record_id'], r['reason']) for r in payload_a['disagreements']},
+            {
+                ('REC-1015', 'MISSING_IN_B'),
+                ('REC-1027', 'VALUE_MISMATCH'),
+                ('REC-1042', 'DUPLICATE_IN_B'),
+                ('REC-1064', 'VALUE_MISMATCH'),
+                ('REC-1077', 'TENANT_MISMATCH'),
+                ('REC-1088', 'VALUE_MISMATCH'),
+                ('REC-1999', 'ORPHAN_IN_B'),
+            },
+        )
         self.assertNotIn('LOC-201', str(payload_a))
         self.assertNotIn('ORG-B', str(payload_a))
         sort_vals_a = [r['sort_value'] for r in payload_a['disagreements']]
@@ -258,6 +286,44 @@ class ReconciliationTests(TestCase):
         resp_b = client.get('/api/disagreements/?org=ORG-B')
         self.assertEqual(resp_b.status_code, 200)
         payload_b = resp_b.json()
-        self.assertEqual(payload_b['count'], 6)
+        self.assertEqual(
+            {(r['record_id'], r['reason']) for r in payload_b['disagreements']},
+            {
+                ('REC-1003', 'VALUE_MISMATCH'),
+                ('REC-1009', 'DATE_MISMATCH'),
+                ('REC-1019', 'VOIDED_IN_A'),
+                ('REC-1050', 'UNPARSEABLE_VALUE'),
+                ('REC-1061', 'MISSING_IN_B'),
+                ('REC-1077', 'TENANT_MISMATCH'),
+            },
+        )
         self.assertNotIn('LOC-102', str(payload_b))
         self.assertNotIn('ORG-A', str(payload_b))
+
+    def test_importer_reports_duplicate_keys_and_unmapped_locations(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / 'locations.csv').write_text(
+                'location_id,org_id,location_name\nLOC-101,ORG-A,Location 101\n',
+                encoding='utf-8',
+            )
+            (tmp_dir / 'system_a.csv').write_text(
+                'record_id,location_id,event_date,category_code,actor_id,base_value,adjustment,total_value,state\n'
+                'REC-1001,LOC-101,2026-03-01,CAT-01,ACT-1,100.00,0.00,100.00,CONFIRMED\n'
+                'rec1001,LOC-999,2026-03-01,CAT-01,ACT-1,200.00,0.00,200.00,CONFIRMED\n',
+                encoding='utf-8',
+            )
+            (tmp_dir / 'system_b.csv').write_text(
+                'entry_id,record_ref,location_id,recorded_on,value,label\n'
+                'ENT-1,REC-1001,LOC-101,2026-03-01,200.00,ok\n',
+                encoding='utf-8',
+            )
+            result = import_csv_directory(tmp_dir, replace=True)
+            self.assertEqual(result['system_a'], 1)
+            issues_str = '\n'.join(result['issues'])
+            self.assertIn("duplicate record_id 'REC-1001'", issues_str)
+            self.assertIn("unmapped location_id 'LOC-999'", issues_str)
+
+

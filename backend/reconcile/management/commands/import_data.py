@@ -28,3 +28,6 @@ class Command(BaseCommand):
                 f"{counts['system_b']} System B entries from {data_dir}"
             )
         )
+        for issue in counts.get('issues', []):
+            self.stdout.write(self.style.WARNING(f'  import warning: {issue}'))
+
