@@ -115,12 +115,10 @@ function getAuditSteps(row: Disagreement, org: string): string[] {
     );
   } else if (row.reason === 'DUPLICATE_IN_B') {
     steps.push(
-      'Multiple System B entries normalize to the same record reference and repeat the posted amount.',
+      'Multiple System B entries normalize to the same record reference and repeat System A full amount at least twice.',
     );
   } else if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
-    steps.push(
-      'Multiple System B entries normalize to the same record reference, but their combined sum differs from System A total_value.',
-    );
+    steps.push(row.detail);
   } else if (row.reason === 'TENANT_MISMATCH') {
     steps.push(
       'A matching normalized reference exists under another organization; foreign identifiers and amounts were redacted on the server.',
@@ -333,44 +331,71 @@ function BookOpenIcon() {
 
 type CopilotTopic = 'why' | 'math' | 'tenant' | 'fix';
 
+function formatSystemDisplay(val: string | null, raw: string, reason: string): string {
+  if (val !== null) {
+    const parsed = Number(val);
+    if (Number.isFinite(parsed)) {
+      return `₹${formatMoney(parsed)}`;
+    }
+  }
+  if (reason === 'TENANT_MISMATCH' && raw === 'Redacted (other org)') {
+    return 'Redacted (other org)';
+  }
+  if (raw && raw !== '-') {
+    return `Unavailable (raw: ${raw})`;
+  }
+  return 'Not present';
+}
+
 function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): string {
-  const aFormatted =
-    row.system_a_value !== null ? `₹${formatMoney(Number(row.system_a_value))}` : 'None';
-  const bFormatted =
-    row.system_b_value !== null ? `₹${formatMoney(Number(row.system_b_value))}` : 'None';
-  const aNum = row.system_a_value !== null ? Number(row.system_a_value) : 0;
-  const bNum = row.system_b_value !== null ? Number(row.system_b_value) : 0;
-  const diff = Math.abs(aNum - bNum);
+  const aFormatted = formatSystemDisplay(row.system_a_value, row.system_a_raw, row.reason);
+  const bFormatted = formatSystemDisplay(row.system_b_value, row.system_b_raw, row.reason);
+  const aNum = row.system_a_value !== null ? Number(row.system_a_value) : null;
+  const bNum = row.system_b_value !== null ? Number(row.system_b_value) : null;
+  const hasBothValues =
+    aNum !== null && bNum !== null && Number.isFinite(aNum) && Number.isFinite(bNum);
+  const diff = hasBothValues ? Math.abs(aNum - bNum) : null;
+
+  const unavailableVarianceReason =
+    row.reason === 'TENANT_MISMATCH'
+      ? `Unavailable (${row.system_a_value === null ? 'System A' : 'System B'} redacted for cross-tenant isolation)`
+      : row.reason === 'UNPARSEABLE_VALUE'
+        ? 'Unavailable (blank or unparseable value)'
+        : 'Unavailable (no comparable value on both sides)';
 
   if (topic === 'why') {
     if (row.detail.includes('base_value')) {
-      return `System B's recorded value (${bFormatted}) matches System A's base_value, while System A's total_value (${aFormatted}) includes an adjustment of ₹${formatMoney(diff)} (28% of base_value). The CSV exports show the exact difference but do not specify which system is authoritative.`;
+      const varianceClause =
+        diff !== null ? ` of ₹${formatMoney(diff)} (28% of base_value)` : '';
+      return `System B's recorded value (${bFormatted}) matches System A's base_value, while System A's total_value (${aFormatted}) includes an adjustment${varianceClause}. The CSV exports show the exact difference but do not specify which system is authoritative.`;
     }
     if (row.reason === 'DUPLICATE_IN_B') {
-      return `System B contains ${row.system_b_rows.length || 2} entries for ${row.record_id} that repeat ${aFormatted} (summing to ${bFormatted}), unlike REC-1055 where two distinct partial amounts sum to System A's total.`;
+      return `System B contains ${row.system_b_rows.length || 2} entries for ${row.record_id} totaling ${bFormatted}, repeating System A's full amount (${aFormatted}) at least twice.`;
     }
     if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
-      return `System B contains ${row.system_b_rows.length} entries summing to ${bFormatted} against System A's ${aFormatted}; because the partial sum neither matches total_value nor repeats an identical posting, the relationship is flagged as unresolved.`;
+      return row.detail;
     }
     if (row.reason === 'TENANT_MISMATCH') {
       return `${row.record_id} is mapped to ${row.location_name} (${row.location_id}) in ${org}, while a matching normalized reference exists under a location belonging to another organization.`;
     }
     if (row.reason === 'VOIDED_IN_A') {
-      return `${row.record_id} has state VOIDED in System A, while System B still holds an active entry for ${bFormatted}.`;
+      return `${row.record_id} has state VOIDED in System A, while System B still holds an active entry (${bFormatted}).`;
     }
     if (row.reason === 'UNPARSEABLE_VALUE') {
-      return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || 'blank'}).`;
+      return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || row.system_a_raw || 'blank'}).`;
     }
     return row.detail;
   }
 
   if (topic === 'math') {
+    const varianceDisplay =
+      diff !== null ? `Absolute variance: ₹${formatMoney(diff)}` : `Variance: ${unavailableVarianceReason}`;
     if (row.system_a_base_value !== null && row.system_a_adjustment !== null) {
       const baseFmt = `₹${formatMoney(Number(row.system_a_base_value))}`;
       const adjFmt = `₹${formatMoney(Number(row.system_a_adjustment))}`;
-      return `System A base_value: ${baseFmt} + adjustment: ${adjFmt} = total_value: ${aFormatted} | System B: ${bFormatted} | Absolute variance: ₹${formatMoney(diff)}.`;
+      return `System A base_value: ${baseFmt} + adjustment: ${adjFmt} = total_value: ${aFormatted} | System B: ${bFormatted} | ${varianceDisplay}.`;
     }
-    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute variance: ₹${formatMoney(diff)} | Sort magnitude: ₹${formatMoney(Number(row.sort_value))}.`;
+    return `System A: ${aFormatted} | System B: ${bFormatted} | ${varianceDisplay} | Sort magnitude: ₹${formatMoney(Number(row.sort_value))}.`;
   }
 
   if (topic === 'tenant') {
@@ -384,10 +409,13 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
     return `Verify the source documentation for ${row.record_id} at ${row.location_id} to confirm whether the adjustment should be included or excluded before updating either system.`;
   }
   if (row.reason === 'DUPLICATE_IN_B') {
-    return `Inspect both System B source entries (${row.system_b_raw}) against source records to confirm whether one posting is an unintended duplicate before taking action.`;
+    return `Inspect the System B source entries (${row.system_b_raw}) against source records to confirm whether one posting is an unintended duplicate before taking action.`;
   }
   if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
-    return `Verify whether additional split entries for ${row.record_id} are missing from System B or whether one of the partial postings is inaccurate.`;
+    return `Verify source records for ${row.record_id} across both systems to confirm why the entries do not reconcile.`;
+  }
+  if (row.reason === 'UNPARSEABLE_VALUE') {
+    return `Inspect the source CSV row for ${row.record_id} (${row.system_b_raw || row.system_a_raw || 'blank'}) and correct the missing or malformed amount before re-importing.`;
   }
   if (row.reason === 'VOIDED_IN_A') {
     return `Confirm whether ${row.record_id} was intentionally voided in System A or whether System B's active entry should be updated.`;
@@ -988,7 +1016,7 @@ export default function DisagreementsPage() {
             </div>
             <div className="kpi-bottom">
               <span className="kpi-value tabular">{metrics.orgTotal}</span>
-              <SegmentBar percent={metrics.orgTotal > 0 ? 84 : 0} tone="auto" />
+              <SegmentBar percent={metrics.orgTotal > 0 ? 100 : 0} tone="auto" />
             </div>
           </button>
 
@@ -1301,17 +1329,18 @@ export default function DisagreementsPage() {
                   {visibleRows.map((row, idx) => {
                     const tone = getReasonTone(row.reason);
                     const secondary = getSecondaryTag(row);
-                    const rowKey = `${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`;
+                    const bEntryKey = row.system_b_rows.map((e) => e.entry_id).join(',');
+                    const rowKey = `${row.record_id}-${row.reason}-${row.system_a_row ?? 'na'}-${bEntryKey || row.system_b_raw}`;
                     const isSelected =
-                      activeRow?.record_id === row.record_id && activeRow?.reason === row.reason;
+                      activeRow?.record_id === row.record_id &&
+                      activeRow?.reason === row.reason &&
+                      activeRow?.system_a_row === row.system_a_row &&
+                      activeRow?.system_b_raw === row.system_b_raw;
                     const delay = Math.min(idx, 8) * 24;
                     const rowSortNum = Number(row.sort_value) || 0;
                     const exposurePct =
                       metrics.magnitudeDenominator > 0
-                        ? Math.max(
-                            rowSortNum > 0 ? 8 : 0,
-                            Math.round((rowSortNum / metrics.magnitudeDenominator) * 100),
-                          )
+                        ? Math.round((rowSortNum / metrics.magnitudeDenominator) * 100)
                         : 0;
 
                     return (

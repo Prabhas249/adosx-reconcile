@@ -177,11 +177,12 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
                 )
         return None
 
-    distinct_vals = {e.value for e in entries if e.value is not None}
-    is_repeated_posting = len(distinct_vals) == 1 or (
-        rec.total_value is not None and any(e.value == rec.total_value for e in entries)
+    full_matches = (
+        sum(1 for e in entries if e.value == rec.total_value)
+        if rec.total_value is not None
+        else 0
     )
-    if is_repeated_posting:
+    if full_matches >= 2:
         return _for_record(
             rec,
             reason='DUPLICATE_IN_B',
@@ -214,6 +215,48 @@ def _format_value_mismatch_detail(rec: SystemARecord, entry: SystemBEntry) -> st
     return detail
 
 
+def _reconcile_duplicate_a(
+    rec_id: str,
+    recs: list[SystemARecord],
+    entries: list[SystemBEntry],
+) -> Disagreement:
+    loc_id, loc_name = _location_meta(recs[0])
+    has_a_err = any(r.value_parse_error or r.total_value is None for r in recs)
+    a_val = (
+        None
+        if has_a_err
+        else sum((r.total_value for r in recs if r.total_value is not None), Decimal('0.00'))
+    )
+    a_raw = ' + '.join(
+        f'row #{r.source_row or "?"}: {r.raw_total_value or "(blank)"}' for r in recs
+    )
+    has_b_err = any(e.value_parse_error or e.value is None for e in entries)
+    b_val = (
+        None
+        if not entries or has_b_err
+        else sum((e.value for e in entries if e.value is not None), Decimal('0.00'))
+    )
+    b_raw = (
+        ' + '.join(f'{e.entry_id}: {e.raw_value or "(blank)"}' for e in entries)
+        if entries
+        else '-'
+    )
+    row_nums = ', '.join(f'#{r.source_row}' for r in recs if r.source_row is not None)
+    return _build_disagreement(
+        record_id=rec_id,
+        reason='MULTI_ENTRY_UNRESOLVED',
+        detail=f'Duplicate record_id {rec_id} appears {len(recs)} times in System A (rows {row_nums or "unknown"}).',
+        location_id=loc_id,
+        location_name=loc_name,
+        a_val=a_val,
+        a_raw=a_raw,
+        b_val=b_val,
+        b_raw=b_raw,
+        a_row=recs[0].source_row,
+        b_rows=_entry_provenance(entries),
+    )
+
+
 def _reconcile_record(
     rec: SystemARecord,
     entries: list[SystemBEntry],
@@ -234,7 +277,12 @@ def _reconcile_record(
         )
 
     if rec.state == 'VOIDED':
-        b_val = entries[0].value if len(entries) == 1 else None
+        has_b_err = any(e.value_parse_error or e.value is None for e in entries)
+        b_val = (
+            None
+            if has_b_err
+            else sum((e.value for e in entries if e.value is not None), Decimal('0.00'))
+        )
         b_raw = (
             (entries[0].raw_value or '(blank)')
             if len(entries) == 1
@@ -355,38 +403,11 @@ def _reconcile_orphan_entries(
     return rows
 
 
-def find_disagreements(
+def _cross_org_refs(
     org_id: str,
-    reason_filter: str | None = None,
-    sort_order: str | None = None,
-) -> list[dict]:
-    org_id = (org_id or '').strip()
-    if not org_id or not Location.objects.filter(org_id=org_id).exists():
-        raise ValueError(f'Unknown org_id: {org_id!r}')
-    if reason_filter and reason_filter not in REASON_LABELS:
-        raise ValueError(f'Unknown reason: {reason_filter!r}')
-    if sort_order and sort_order not in VALID_SORT_ORDERS:
-        raise ValueError(f'Unknown sort order: {sort_order!r}')
-
-    a_records = list(
-        SystemARecord.objects.select_related('location')
-        .filter(location__org_id=org_id)
-        .order_by('record_id')
-    )
-    b_entries = list(
-        SystemBEntry.objects.select_related('location')
-        .filter(location__org_id=org_id)
-        .order_by('entry_id')
-    )
-
-    a_by_id = {rec.record_id: rec for rec in a_records}
-    b_by_ref: dict[str, list[SystemBEntry]] = defaultdict(list)
-    for entry in b_entries:
-        b_by_ref[entry.normalized_record_ref].append(entry)
-
-    missing_a_ids = [rec.record_id for rec in a_records if rec.record_id not in b_by_ref]
-    orphan_b_refs = [ref for ref in b_by_ref if ref not in a_by_id]
-
+    missing_a_ids: list[str],
+    orphan_b_refs: list[str],
+) -> tuple[set[str], set[str]]:
     other_org_b_refs = (
         set(
             SystemBEntry.objects.filter(normalized_record_ref__in=missing_a_ids, location__isnull=False)
@@ -405,12 +426,60 @@ def find_disagreements(
         if orphan_b_refs
         else set()
     )
+    return other_org_b_refs, other_org_a_ids
+
+
+def _sort_results(results: list[Disagreement], sort_order: str | None) -> None:
+    if sort_order == 'value_asc':
+        results.sort(key=lambda r: (r.sort_value, r.record_id))
+    elif sort_order == 'value_desc':
+        results.sort(key=lambda r: (-r.sort_value, r.record_id))
+    else:
+        results.sort(key=lambda r: r.record_id)
+
+
+def find_disagreements(
+    org_id: str,
+    reason_filter: str | None = None,
+    sort_order: str | None = None,
+) -> list[dict]:
+    org_id = (org_id or '').strip()
+    if not org_id or not Location.objects.filter(org_id=org_id).exists():
+        raise ValueError(f'Unknown org_id: {org_id!r}')
+    if reason_filter and reason_filter not in REASON_LABELS:
+        raise ValueError(f'Unknown reason: {reason_filter!r}')
+    if sort_order and sort_order not in VALID_SORT_ORDERS:
+        raise ValueError(f'Unknown sort order: {sort_order!r}')
+
+    a_by_id: dict[str, list[SystemARecord]] = defaultdict(list)
+    for rec in (
+        SystemARecord.objects.select_related('location')
+        .filter(location__org_id=org_id)
+        .order_by('record_id', 'source_row', 'id')
+    ):
+        a_by_id[rec.record_id].append(rec)
+
+    b_by_ref: dict[str, list[SystemBEntry]] = defaultdict(list)
+    for entry in (
+        SystemBEntry.objects.select_related('location')
+        .filter(location__org_id=org_id)
+        .order_by('entry_id')
+    ):
+        b_by_ref[entry.normalized_record_ref].append(entry)
+
+    missing_a_ids = [rec_id for rec_id in a_by_id if rec_id not in b_by_ref]
+    orphan_b_refs = [ref for ref in b_by_ref if ref not in a_by_id]
+    other_org_b_refs, other_org_a_ids = _cross_org_refs(org_id, missing_a_ids, orphan_b_refs)
 
     results: list[Disagreement] = []
-    for rec in a_records:
-        finding = _reconcile_record(rec, b_by_ref.get(rec.record_id, []), other_org_b_refs)
-        if finding is not None:
-            results.append(finding)
+    for rec_id, recs in a_by_id.items():
+        entries = b_by_ref.get(rec_id, [])
+        if len(recs) > 1:
+            results.append(_reconcile_duplicate_a(rec_id, recs, entries))
+        else:
+            finding = _reconcile_record(recs[0], entries, other_org_b_refs)
+            if finding is not None:
+                results.append(finding)
 
     for ref, entries in b_by_ref.items():
         if ref not in a_by_id:
@@ -419,11 +488,5 @@ def find_disagreements(
     if reason_filter:
         results = [r for r in results if r.reason == reason_filter]
 
-    if sort_order == 'value_asc':
-        results.sort(key=lambda r: (r.sort_value, r.record_id))
-    elif sort_order == 'value_desc':
-        results.sort(key=lambda r: (-r.sort_value, r.record_id))
-    else:
-        results.sort(key=lambda r: r.record_id)
-
+    _sort_results(results, sort_order)
     return [r.to_dict() for r in results]

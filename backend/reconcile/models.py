@@ -14,7 +14,7 @@ class Location(models.Model):
 
 
 class SystemARecord(models.Model):
-    record_id = models.CharField(max_length=64, unique=True)
+    record_id = models.CharField(max_length=64, db_index=True)
     raw_record_id = models.CharField(max_length=64)
     location = models.ForeignKey(
         Location,

@@ -89,13 +89,12 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
         for row_num, row in enumerate(csv.DictReader(f), start=2):
             raw_id = row.get('record_id') or ''
             cleaned_id = normalize_record_ref(raw_id)
-            base_id = cleaned_id or f'BLANK-ROW-{row_num}'
-            norm_id = _unique_id(base_id, seen_ids, row_num)
+            norm_id = cleaned_id or f'BLANK-ROW-{row_num}'
             if not cleaned_id:
                 issues.append(f'system_a.csv row {row_num}: blank record_id stored as {norm_id!r}')
-            elif norm_id != base_id:
+            elif norm_id in seen_ids:
                 issues.append(
-                    f'system_a.csv row {row_num}: duplicate record_id {base_id!r} (raw {raw_id!r}) preserved as {norm_id!r}'
+                    f'system_a.csv row {row_num}: duplicate record_id {norm_id!r} (raw {raw_id!r}) preserved'
                 )
             seen_ids.add(norm_id)
 
@@ -112,29 +111,26 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
                     f'system_a.csv row {row_num} ({norm_id}): unparseable total_value {row.get("total_value")!r}'
                 )
 
-            _, created = SystemARecord.objects.update_or_create(
+            SystemARecord.objects.create(
                 record_id=norm_id,
-                defaults={
-                    'raw_record_id': raw_id,
-                    'location': loc_obj,
-                    'location_id_raw': loc_raw,
-                    'event_date': parse_date_safe(row.get('event_date')),
-                    'raw_event_date': row.get('event_date') or '',
-                    'category_code': (row.get('category_code') or '').strip(),
-                    'actor_id': (row.get('actor_id') or '').strip(),
-                    'base_value': base_val,
-                    'raw_base_value': row.get('base_value') or '',
-                    'adjustment': adj_val,
-                    'raw_adjustment': row.get('adjustment') or '',
-                    'total_value': total_val,
-                    'raw_total_value': row.get('total_value') or '',
-                    'value_parse_error': total_err,
-                    'state': (row.get('state') or 'CONFIRMED').strip().upper(),
-                    'source_row': row_num,
-                },
+                raw_record_id=raw_id,
+                location=loc_obj,
+                location_id_raw=loc_raw,
+                event_date=parse_date_safe(row.get('event_date')),
+                raw_event_date=row.get('event_date') or '',
+                category_code=(row.get('category_code') or '').strip(),
+                actor_id=(row.get('actor_id') or '').strip(),
+                base_value=base_val,
+                raw_base_value=row.get('base_value') or '',
+                adjustment=adj_val,
+                raw_adjustment=row.get('adjustment') or '',
+                total_value=total_val,
+                raw_total_value=row.get('total_value') or '',
+                value_parse_error=total_err,
+                state=(row.get('state') or 'CONFIRMED').strip().upper(),
+                source_row=row_num,
             )
-            if created:
-                a_count += 1
+            a_count += 1
     return a_count
 
 

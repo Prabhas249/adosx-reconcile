@@ -323,6 +323,24 @@ class ReconciliationTests(TestCase):
         self.assertEqual(rows[0]['system_b_value'], '700.00')
         self.assertIn('sum to 700.00', rows[0]['detail'])
 
+    def test_repeated_partial_payments_flag_unresolved_multi_entry(self):
+        self._create_a(record_id='REC-1058', total='1000.00')
+        self._create_b(entry_id='ENT/2026/4058', raw_ref='REC-1058', raw_value='400.00')
+        self._create_b(entry_id='ENT/2026/4907', raw_ref='REC-1058', raw_value='400.00')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'MULTI_ENTRY_UNRESOLVED')
+        self.assertEqual(rows[0]['system_b_value'], '800.00')
+
+    def test_single_full_plus_partial_flags_unresolved_multi_entry(self):
+        self._create_a(record_id='REC-1059', total='1000.00')
+        self._create_b(entry_id='ENT/2026/4059', raw_ref='REC-1059', raw_value='1000.00')
+        self._create_b(entry_id='ENT/2026/4908', raw_ref='REC-1059', raw_value='250.00')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'MULTI_ENTRY_UNRESOLVED')
+        self.assertEqual(rows[0]['system_b_value'], '1250.00')
+
     def test_importer_preserves_duplicate_keys_and_reports_unmapped_locations(self):
         import tempfile
 
@@ -335,7 +353,8 @@ class ReconciliationTests(TestCase):
             (tmp_dir / 'system_a.csv').write_text(
                 'record_id,location_id,event_date,category_code,actor_id,base_value,adjustment,total_value,state\n'
                 'REC-1001,LOC-101,2026-03-01,CAT-01,ACT-1,100.00,0.00,100.00,CONFIRMED\n'
-                'rec1001,LOC-999,2026-03-01,CAT-01,ACT-1,200.00,0.00,200.00,CONFIRMED\n',
+                'rec1001,LOC-101,2026-03-01,CAT-01,ACT-1,200.00,0.00,200.00,CONFIRMED\n'
+                'REC-1002,LOC-999,2026-03-01,CAT-01,ACT-1,200.00,0.00,200.00,CONFIRMED\n',
                 encoding='utf-8',
             )
             (tmp_dir / 'system_b.csv').write_text(
@@ -344,10 +363,19 @@ class ReconciliationTests(TestCase):
                 encoding='utf-8',
             )
             result = import_csv_directory(tmp_dir, replace=True)
-            self.assertEqual(result['system_a'], 2)
-            self.assertEqual(SystemARecord.objects.count(), 2)
+            self.assertEqual(result['system_a'], 3)
+            self.assertEqual(SystemARecord.objects.count(), 3)
+            dup_rows = list(SystemARecord.objects.filter(record_id='REC-1001').order_by('source_row'))
+            self.assertEqual([r.source_row for r in dup_rows], [2, 3])
+            self.assertFalse(SystemARecord.objects.filter(record_id__contains='DUP-ROW').exists())
             issues_str = '\n'.join(result['issues'])
-            self.assertIn("duplicate record_id 'REC-1001' (raw 'rec1001') preserved as 'REC-1001-DUP-ROW-3'", issues_str)
+            self.assertIn("duplicate record_id 'REC-1001' (raw 'rec1001') preserved", issues_str)
             self.assertIn("unmapped location_id 'LOC-999'", issues_str)
+
+            disagreements = find_disagreements('ORG-A')
+            self.assertEqual(len(disagreements), 1)
+            self.assertEqual(disagreements[0]['record_id'], 'REC-1001')
+            self.assertEqual(disagreements[0]['reason'], 'MULTI_ENTRY_UNRESOLVED')
+            self.assertIn('Duplicate record_id REC-1001 appears 2 times in System A', disagreements[0]['detail'])
 
 
