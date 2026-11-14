@@ -48,7 +48,7 @@ Install dev dependencies (`pip install -r backend/requirements-dev.txt`), then r
   - `VOIDED_IN_A`: `REC-1019` has `VOIDED` state in System A while active in System B (`ORG-B`)
   - `DATE_MISMATCH`: `REC-1009` date cutoff `2026-03-31` vs `2026-04-02` (`ORG-B`)
   - `TENANT_MISMATCH`: System A assigns `REC-1077` to `LOC-102` (`ORG-A`) while System B assigns it to `LOC-201` (`ORG-B`). Both orgs see the boundary disagreement with foreign identifiers redacted.
-- **Plain responsive table UI** in [`page.tsx`](frontend/src/app/page.tsx) and [`globals.css`](frontend/src/app/globals.css) with an org switcher, reason filter, value sort control, and both parsed and raw CSV values displayed per row.
+- **Responsive table UI and row inspector** in [`page.tsx`](frontend/src/app/page.tsx) and [`globals.css`](frontend/src/app/globals.css) with a segmented org switcher, search filter, custom-styled reason and sort selects, copyable record IDs, and a focus-trapped detail drawer showing parsed and raw CSV values.
 - **Automated tests** in [`tests.py`](backend/reconcile/tests.py) with 19 unit and API tests covering every disagreement reason in `REASON_LABELS` (including same-org `LOCATION_MISMATCH`), both non-error cases, `base_value` mismatch hints, unmapped locations, duplicate-key import warnings, cross-tenant redaction, `/api/orgs/`, query parameter validation, value sorting with null amounts, and the exact disagreement set per org on the full CSV import.
 
 ## What I did not build
@@ -56,7 +56,7 @@ Install dev dependencies (`pip install -r backend/requirements-dev.txt`), then r
 - **Authentication and login.** The brief asked to skip auth, so [`views.py`](backend/reconcile/views.py) enforces org scoping through a mandatory `org` query parameter and ORM filters, and `/api/orgs/` supplies the org switcher list.
 - **CSV upload UI.** Ingestion runs through `python manage.py import_data` so I could focus on schema design, parser resilience, and comparison rules.
 - **PostgreSQL or Docker setup.** I kept SQLite as the default database so reviewers can run the app immediately after cloning.
-- **Component libraries, drawers, or client-side search.** I kept a plain HTML table with reason filtering and value sorting per the brief.
+- **External UI component libraries.** I used semantic HTML and CSS custom properties with zero frontend runtime dependencies beyond React and Next.js.
 
 ## How I worked with the agent
 

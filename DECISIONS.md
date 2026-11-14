@@ -18,5 +18,5 @@
 6. **Flag cross-tenant mismatches (`REC-1077`) via a membership query with redacted cross-org fields.**
    Rejected strict per-org-only filtering (which mislabels `REC-1077` as missing in System B for `ORG-A`) and rejected returning `LOC-201` or `ORG-B` identifiers (which leaks tenant data). Querying only matching `normalized_record_ref` IDs where `location` belongs to another org (`.filter(location__isnull=False).exclude(location__org_id=org_id).values_list(...)`) reports `TENANT_MISMATCH` to both orgs without returning any foreign fields.
 
-7. **Keep a plain HTML table and an unauthenticated org switcher instead of custom UI widgets, auth, or upload screens.**
-   Rejected building login flows, browser CSV uploads, client-side search, and slide-over drawers because the brief explicitly scoped them out and asked for a plain table. Enforcing a mandatory `?org=` query parameter on `/api/disagreements/` and keeping the frontend to 290 lines of TSX and 286 lines of CSS kept the focus on ingestion resilience, tenant isolation, and regression tests.
+7. **Cut authentication, upload UI, and external UI libraries.**
+   Rejected building login flows, browser CSV uploads, and third-party component libraries because the brief scoped them out. Enforcing a mandatory `?org=` query parameter on `/api/disagreements/` and using semantic HTML and CSS custom properties kept the focus on ingestion resilience, tenant isolation, and regression tests.
