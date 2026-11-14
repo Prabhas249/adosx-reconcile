@@ -300,7 +300,17 @@ class ReconciliationTests(TestCase):
         self.assertNotIn('LOC-102', str(payload_b))
         self.assertNotIn('ORG-A', str(payload_b))
 
-    def test_importer_reports_duplicate_keys_and_unmapped_locations(self):
+    def test_incomplete_split_payment_flags_value_mismatch_not_duplicate(self):
+        self._create_a(record_id='REC-1057', total='1000.00')
+        self._create_b(entry_id='ENT/2026/4057', raw_ref='REC-1057', raw_value='400.00')
+        self._create_b(entry_id='ENT/2026/4906', raw_ref='REC-1057', raw_value='300.00')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['reason'], 'VALUE_MISMATCH')
+        self.assertEqual(rows[0]['system_b_value'], '700.00')
+        self.assertIn('2-entry sum (700.00', rows[0]['detail'])
+
+    def test_importer_preserves_duplicate_keys_and_reports_unmapped_locations(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -321,9 +331,10 @@ class ReconciliationTests(TestCase):
                 encoding='utf-8',
             )
             result = import_csv_directory(tmp_dir, replace=True)
-            self.assertEqual(result['system_a'], 1)
+            self.assertEqual(result['system_a'], 2)
+            self.assertEqual(SystemARecord.objects.count(), 2)
             issues_str = '\n'.join(result['issues'])
-            self.assertIn("duplicate record_id 'REC-1001'", issues_str)
+            self.assertIn("duplicate record_id 'REC-1001' (raw 'rec1001') preserved as 'REC-1001-DUP-ROW-3'", issues_str)
             self.assertIn("unmapped location_id 'LOC-999'", issues_str)
 
 

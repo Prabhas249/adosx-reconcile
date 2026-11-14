@@ -71,6 +71,17 @@ def _load_locations(path: Path, issues: list[str]) -> dict[str, Location]:
     return locations_by_id
 
 
+def _unique_id(base_id: str, seen_ids: set[str], row_num: int) -> str:
+    if base_id not in seen_ids:
+        return base_id
+    candidate = f'{base_id}-DUP-ROW-{row_num}'
+    suffix = 2
+    while candidate in seen_ids:
+        candidate = f'{base_id}-DUP-ROW-{row_num}-{suffix}'
+        suffix += 1
+    return candidate
+
+
 def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: list[str]) -> int:
     a_count = 0
     seen_ids: set[str] = set()
@@ -78,12 +89,13 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
         for row_num, row in enumerate(csv.DictReader(f), start=2):
             raw_id = row.get('record_id') or ''
             cleaned_id = normalize_record_ref(raw_id)
-            norm_id = cleaned_id or f'BLANK-ROW-{row_num}'
+            base_id = cleaned_id or f'BLANK-ROW-{row_num}'
+            norm_id = _unique_id(base_id, seen_ids, row_num)
             if not cleaned_id:
                 issues.append(f'system_a.csv row {row_num}: blank record_id stored as {norm_id!r}')
-            elif norm_id in seen_ids:
+            elif norm_id != base_id:
                 issues.append(
-                    f'system_a.csv row {row_num}: duplicate record_id {norm_id!r} (raw {raw_id!r}) overwrote earlier row'
+                    f'system_a.csv row {row_num}: duplicate record_id {base_id!r} (raw {raw_id!r}) preserved as {norm_id!r}'
                 )
             seen_ids.add(norm_id)
 
@@ -131,12 +143,13 @@ def _load_system_b(path: Path, locations_by_id: dict[str, Location], issues: lis
     with path.open('r', encoding='utf-8-sig', newline='') as f:
         for row_num, row in enumerate(csv.DictReader(f), start=2):
             raw_entry_id = (row.get('entry_id') or '').strip()
-            entry_id = raw_entry_id or f'BLANK-ENTRY-{row_num}'
+            base_entry_id = raw_entry_id or f'BLANK-ENTRY-{row_num}'
+            entry_id = _unique_id(base_entry_id, seen_ids, row_num)
             if not raw_entry_id:
                 issues.append(f'system_b.csv row {row_num}: blank entry_id stored as {entry_id!r}')
-            elif entry_id in seen_ids:
+            elif entry_id != base_entry_id:
                 issues.append(
-                    f'system_b.csv row {row_num}: duplicate entry_id {entry_id!r} overwrote earlier row'
+                    f'system_b.csv row {row_num}: duplicate entry_id {base_entry_id!r} preserved as {entry_id!r}'
                 )
             seen_ids.add(entry_id)
 

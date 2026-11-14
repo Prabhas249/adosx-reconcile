@@ -53,7 +53,6 @@ class SystemARecord(models.Model):
 class SystemBEntry(models.Model):
     entry_id = models.CharField(max_length=64, unique=True)
     raw_record_ref = models.CharField(max_length=64)
-    # Indexed CharField instead of ForeignKey so orphan refs (such as REC-1999) import cleanly.
     normalized_record_ref = models.CharField(max_length=64, db_index=True)
 
     location = models.ForeignKey(

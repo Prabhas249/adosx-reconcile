@@ -84,11 +84,11 @@ function getAuditSteps(row: Disagreement, org: string): string[] {
   );
   if (row.detail.includes('base_value')) {
     steps.push(
-      'System B recorded only System A base_value and dropped the 28% GST adjustment column during posting.',
+      'System B value equals System A base_value without the adjustment column (which equals 28% of base_value across system_a.csv).',
     );
   } else if (row.reason === 'DUPLICATE_IN_B') {
     steps.push(
-      'Multiple non-split System B entries share the same normalized record reference without Part indicators.',
+      'Multiple System B entries repeat the full expected amount under the same normalized record reference.',
     );
   } else if (row.reason === 'TENANT_MISMATCH') {
     steps.push(
@@ -266,19 +266,22 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
     row.system_a_value !== null ? `₹${formatMoney(Number(row.system_a_value))}` : 'None';
   const bFormatted =
     row.system_b_value !== null ? `₹${formatMoney(Number(row.system_b_value))}` : 'None';
+  const aNum = row.system_a_value !== null ? Number(row.system_a_value) : 0;
+  const bNum = row.system_b_value !== null ? Number(row.system_b_value) : 0;
+  const diff = Math.abs(aNum - bNum);
 
   if (topic === 'why') {
     if (row.detail.includes('base_value')) {
-      return `System A recorded the full invoice total (${aFormatted} = base_value + 28% Indian 2-wheeler GST adjustment), whereas System B posted only the pre-GST base_value (${bFormatted}), omitting the 28% GST slab.`;
+      return `System B's recorded value (${bFormatted}) matches System A's base_value, while System A's total_value (${aFormatted}) is higher by ₹${formatMoney(diff)} (28% of base_value). This is consistent with an omitted adjustment (such as a 28% GST slab), though the CSV exports alone do not establish the upstream cause.`;
     }
     if (row.reason === 'DUPLICATE_IN_B') {
-      return `System B contains two separate ledger postings for ${row.record_id} that each carry the full amount (${aFormatted}), doubling the ledger exposure to ${bFormatted} instead of summing to System A like a valid split settlement (such as REC-1055).`;
+      return `System B contains two separate entries for ${row.record_id} that each carry ${aFormatted} (summing to ${bFormatted}), unlike REC-1055 where two partial entries sum to System A's total.`;
     }
     if (row.reason === 'TENANT_MISMATCH') {
-      return `${row.record_id} was recorded at ${row.location_name} (${row.location_id}) in ${org}, while the corresponding counterparty entry was booked under a location belonging to a different organization.`;
+      return `${row.record_id} is recorded at ${row.location_name} (${row.location_id}) in ${org}, while a matching normalized reference exists under a location mapped to another organization.`;
     }
     if (row.reason === 'VOIDED_IN_A') {
-      return `${row.record_id} was marked VOIDED in System A, but the cancellation never propagated to System B, leaving an active ${bFormatted} ledger balance.`;
+      return `${row.record_id} has state VOIDED in System A, while System B holds an active entry for ${bFormatted}.`;
     }
     if (row.reason === 'UNPARSEABLE_VALUE') {
       return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || 'blank'}).`;
@@ -287,14 +290,11 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
   }
 
   if (topic === 'math') {
-    const aNum = row.system_a_value !== null ? Number(row.system_a_value) : 0;
-    const bNum = row.system_b_value !== null ? Number(row.system_b_value) : 0;
-    const diff = Math.abs(aNum - bNum);
     if (row.detail.includes('base_value') && bNum > 0) {
-      const gst = aNum - bNum;
-      return `Pre-GST base_value: ₹${formatMoney(bNum)} | 28% GST adjustment: ₹${formatMoney(gst)} | System A total_value: ₹${formatMoney(aNum)} | Unposted GST variance: ₹${formatMoney(diff)}.`;
+      const adj = aNum - bNum;
+      return `System A base_value: ₹${formatMoney(bNum)} | System A adjustment (+28%): ₹${formatMoney(adj)} | System A total_value: ₹${formatMoney(aNum)} | Net delta vs System B: ₹${formatMoney(diff)}.`;
     }
-    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute net variance: ₹${formatMoney(diff)} | Sort exposure: ₹${formatMoney(row.sort_value)}.`;
+    return `System A: ${aFormatted} | System B: ${bFormatted} | Absolute net delta: ₹${formatMoney(diff)} | Sort magnitude: ₹${formatMoney(row.sort_value)}.`;
   }
 
   if (topic === 'tenant') {
@@ -305,27 +305,27 @@ function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): 
   }
 
   if (row.detail.includes('base_value')) {
-    return `Post a supplementary 28% GST adjustment voucher in System B for ${row.record_id} at ${row.location_id} so the ledger matches System A total_value (${aFormatted}).`;
+    return `Verify the adjustment rule and source voucher for ${row.record_id} at ${row.location_id} before deciding whether System B needs an adjustment entry or System A's adjustment should be revised.`;
   }
   if (row.reason === 'DUPLICATE_IN_B') {
-    return `Reverse the duplicate System B voucher (ENT/2026/4902) so only a single ${aFormatted} posting remains against ${row.record_id}.`;
+    return `Inspect both System B vouchers (${row.system_b_raw}) against source receipts to confirm whether one is an accidental duplicate posting before reversing.`;
   }
   if (row.reason === 'VOIDED_IN_A') {
-    return `Pass a reversal credit note in System B for ${bFormatted} to mirror the VOIDED state of ${row.record_id} in System A.`;
+    return `Confirm whether ${row.record_id} was validly voided in System A or whether System B still reflects a live transaction that was voided in error.`;
   }
   if (row.reason === 'MISSING_IN_B') {
-    return `Import or voucher the missing ${aFormatted} entry into System B under ${row.location_id} with reference ${row.record_id}.`;
+    return `Check whether ${row.record_id} (${aFormatted}) is pending ingestion into System B or was recorded in System A without a backing ledger event.`;
   }
   if (row.reason === 'ORPHAN_IN_B') {
-    return `Audit voucher ${row.system_b_raw} in System B: either link it to a valid System A record ID or reverse the unbacked orphan entry.`;
+    return `Audit System B entry (${row.system_b_raw}) to determine whether its record_ref was mistyped or whether a corresponding System A record is missing.`;
   }
   if (row.reason === 'DATE_MISMATCH') {
-    return `Align the month-end cutoff date between System A and System B so both ledgers recognize ${row.record_id} in the same accounting period.`;
+    return `Compare the event timestamp in System A against the posting date in System B to verify whether ${row.record_id} crossed a month-end cutoff.`;
   }
   if (row.reason === 'TENANT_MISMATCH') {
-    return `Coordinate inter-org transfer clearance: reverse the misrouted entry in the foreign tenant and re-book under ${org} (${row.location_id}).`;
+    return `Review the location assignment on both sides of ${row.record_id} with an administrator authorized across organizations (assuming record_id is globally unique).`;
   }
-  return `Re-verify source voucher in System B against System A (${aFormatted}) and re-import the corrected CSV row.`;
+  return `Compare source documentation for both systems before adjusting ${row.record_id} (neither system is assumed authoritative).`;
 }
 
 function CopyIdButton({ value }: { value: string }) {
@@ -617,9 +617,7 @@ export default function DisagreementsPage() {
     const denom = Math.max(1, total);
     const valueCount = visibleRows.filter((r) => r.reason === 'VALUE_MISMATCH').length;
     const missingCount = visibleRows.filter((r) => r.reason === 'MISSING_IN_B').length;
-    const criticalCount = visibleRows.filter(
-      (r) => r.reason === 'TENANT_MISMATCH' || r.reason === 'VOIDED_IN_A',
-    ).length;
+    const tenantCount = visibleRows.filter((r) => r.reason === 'TENANT_MISMATCH').length;
 
     let sumA = 0;
     let sumB = 0;
@@ -640,10 +638,10 @@ export default function DisagreementsPage() {
       total,
       valueCount,
       missingCount,
-      criticalCount,
+      tenantCount,
       valuePct: (valueCount / denom) * 100,
       missingPct: (missingCount / denom) * 100,
-      criticalPct: (criticalCount / denom) * 100,
+      tenantPct: (tenantCount / denom) * 100,
       sumA,
       sumB,
       maxExposure,
@@ -892,14 +890,14 @@ export default function DisagreementsPage() {
             onClick={() => toggleReasonFilter('TENANT_MISMATCH')}
           >
             <div className="kpi-top">
-              <span className="kpi-label">Tenant &amp; Voided Alerts</span>
+              <span className="kpi-label">Cross-Tenant Alerts</span>
               <span className="crm-tag crm-tag-sm" data-tone="red">
-                Critical
+                Boundary
               </span>
             </div>
             <div className="kpi-bottom">
-              <span className="kpi-value tabular">{metrics.criticalCount}</span>
-              <SegmentBar percent={metrics.criticalPct} tone="auto" />
+              <span className="kpi-value tabular">{metrics.tenantCount}</span>
+              <SegmentBar percent={metrics.tenantPct} tone="auto" />
             </div>
           </button>
         </section>
@@ -1073,7 +1071,7 @@ export default function DisagreementsPage() {
                     <th>Reason &amp; Stage</th>
                     <th className="num">System A Value</th>
                     <th className="num">System B Value</th>
-                    <th className="num">Exposure Share</th>
+                    <th className="num">Relative Magnitude</th>
                     <th>Diagnostic Detail</th>
                   </tr>
                 </thead>
@@ -1135,7 +1133,7 @@ export default function DisagreementsPage() {
                           parsed={row.system_b_value}
                           raw={row.system_b_raw}
                         />
-                        <td className="num tabular" data-label="Exposure Share">
+                        <td className="num tabular" data-label="Relative Magnitude">
                           <span className="exposure-cell">
                             <SegmentBar percent={exposurePct} tone="auto" />
                             <span className="exposure-pct">{exposurePct}%</span>
@@ -1180,7 +1178,7 @@ export default function DisagreementsPage() {
               <strong>₹{formatMoney(metrics.sumB)}</strong>
             </div>
             <div className="footer-cell tabular">
-              <span>+ Peak Exposure</span>
+              <span>+ Max Row Magnitude</span>
               <strong>₹{formatMoney(metrics.maxExposure)}</strong>
             </div>
           </footer>
@@ -1238,7 +1236,7 @@ export default function DisagreementsPage() {
 
               <div className="sheet-compare-grid">
                 <div className="sheet-box">
-                  <span className="sheet-box-label">System A (DMS)</span>
+                  <span className="sheet-box-label">System A</span>
                   <span className="sheet-box-value tabular">
                     {activeRow.system_a_value !== null
                       ? `₹${formatMoney(Number(activeRow.system_a_value))}`
@@ -1249,7 +1247,7 @@ export default function DisagreementsPage() {
                   </span>
                 </div>
                 <div className="sheet-box">
-                  <span className="sheet-box-label">System B (Ledger)</span>
+                  <span className="sheet-box-label">System B</span>
                   <span className="sheet-box-value tabular">
                     {activeRow.system_b_value !== null
                       ? `₹${formatMoney(Number(activeRow.system_b_value))}`
@@ -1282,7 +1280,7 @@ export default function DisagreementsPage() {
                     data-active={copilotTopic === 'math' ? 'true' : 'false'}
                     onClick={() => setCopilotTopic('math')}
                   >
-                    28% GST &amp; Math
+                    Value &amp; Adjustment Math
                   </button>
                   <button
                     type="button"
@@ -1302,7 +1300,7 @@ export default function DisagreementsPage() {
                     data-active={copilotTopic === 'fix' ? 'true' : 'false'}
                     onClick={() => setCopilotTopic('fix')}
                   >
-                    Resolution
+                    Verification Step
                   </button>
                 </div>
                 <p className="kb-answer-text">
@@ -1368,7 +1366,7 @@ export default function DisagreementsPage() {
                   System &amp; Domain Knowledge Base
                 </h2>
                 <span className="crm-tag crm-tag-sm" data-tone="green">
-                  INR ₹ + 28% GST
+                  INR ₹ Audit Notes
                 </span>
               </div>
               <button
@@ -1391,7 +1389,7 @@ export default function DisagreementsPage() {
                   data-active={kbTab === 'domain' ? 'true' : 'false'}
                   onClick={() => setKbTab('domain')}
                 >
-                  Domain &amp; 28% GST Math
+                  Data &amp; Domain Notes
                 </button>
                 <button
                   type="button"
@@ -1418,42 +1416,44 @@ export default function DisagreementsPage() {
               {kbTab === 'domain' && (
                 <>
                   <div className="sheet-box">
-                    <span className="sheet-box-label">1. Dealership DMS vs Accounting Ledger (INR ₹)</span>
+                    <span className="sheet-box-label">1. Source Data Observations &amp; 28% Adjustment Pattern</span>
                     <p className="kb-answer-text">
-                      Every row in <code>system_a.csv</code> represents a dealership operational record where{' '}
+                      Across all 120 rows in <code>system_a.csv</code>,{' '}
                       <code>adjustment = round(base_value * 0.28, 2)</code> and{' '}
-                      <code>total_value = base_value + adjustment</code>. In India, 28% is the exact GST slab for
-                      two-wheelers. Furthermore, <code>REC-1064</code> in <code>system_b.csv</code> uses Indian lakh
-                      comma grouping (<code>1,25,400.00</code>), confirming all figures are Indian Rupees (<code>₹</code>).
+                      <code>total_value = base_value + adjustment</code>. In addition, <code>REC-1064</code> in{' '}
+                      <code>system_b.csv</code> uses Indian lakh comma grouping (<code>1,25,400.00</code>), confirming INR
+                      (<code>₹</code>) amounts. A 28% rate is consistent with a standard tax/GST adjustment slab, though
+                      the CSV files themselves only establish the numeric relationship.
                     </p>
                   </div>
 
                   <div className="sheet-box">
-                    <span className="sheet-box-label">2. Why Adjustment Omissions Happen (REC-1003, REC-1027, REC-1088)</span>
+                    <span className="sheet-box-label">2. Base-Value Matches (REC-1003, REC-1027, REC-1088)</span>
                     <p className="kb-answer-text">
                       In three records (<code>REC-1027</code> and <code>REC-1088</code> in <code>ORG-A</code>, plus{' '}
-                      <code>REC-1003</code> in <code>ORG-B</code>), System B booked only the pre-GST{' '}
-                      <code>base_value</code> (<code>₹61,921.12</code>, <code>₹1,08,553.36</code>, and{' '}
-                      <code>₹94,834.38</code>) and dropped the 28% GST <code>adjustment</code> column (
-                      <code>₹17,337.91</code>, <code>₹30,394.94</code>, and <code>₹26,553.63</code>). Our comparator
+                      <code>REC-1003</code> in <code>ORG-B</code>), System B&apos;s recorded <code>value</code> exactly
+                      matches System A&apos;s <code>base_value</code> (<code>₹61,921.12</code>,{' '}
+                      <code>₹1,08,553.36</code>, and <code>₹94,834.38</code>) without the <code>adjustment</code> column
+                      (<code>₹17,337.91</code>, <code>₹30,394.94</code>, and <code>₹26,553.63</code>). Our comparator
                       detects <code>entry.value == rec.base_value</code> and tags these with{' '}
-                      <strong>Adjustment omitted</strong>.
+                      <strong>Adjustment omitted</strong> so operators can verify the source voucher.
                     </p>
                   </div>
 
                   <div className="sheet-box">
-                    <span className="sheet-box-label">3. Multi-Tenant Isolation &amp; Redaction Architecture</span>
+                    <span className="sheet-box-label">3. Multi-Tenant Isolation &amp; Reference Assumptions</span>
                     <ul className="sheet-audit-list">
                       <li>
-                        <strong>Locations Boundary:</strong> <code>LOC-101</code> (North), <code>LOC-102</code> (Central),
-                        and <code>LOC-103</code> (East) belong to <code>ORG-A</code>. <code>LOC-201</code> (South) and{' '}
-                        <code>LOC-202</code> (West) belong to <code>ORG-B</code>.
+                        <strong>Locations Boundary:</strong> <code>LOC-101</code>, <code>LOC-102</code>, and{' '}
+                        <code>LOC-103</code> belong to <code>ORG-A</code>. <code>LOC-201</code> and <code>LOC-202</code>{' '}
+                        belong to <code>ORG-B</code>.
                       </li>
                       <li>
-                        <strong>Zero Cross-Tenant Leakage:</strong> Every query in <code>comparator.py</code> filters by{' '}
-                        <code>location__org_id=org_id</code>. For cross-tenant collisions (<code>REC-1077</code>), the
-                        server checks ID membership with <code>location__isnull=False</code> and returns{' '}
-                        <code>Redacted (other org)</code> without exposing foreign org IDs, locations, or rupee amounts.
+                        <strong>Global Record ID Assumption:</strong> Assuming normalized <code>record_id</code> values
+                        are globally unique across exports, <code>comparator.py</code> checks cross-org membership on
+                        unmatched references with <code>location__isnull=False</code> and returns{' '}
+                        <code>Redacted (other org)</code> for <code>REC-1077</code> without exposing foreign org IDs,
+                        locations, or amounts.
                       </li>
                     </ul>
                   </div>
@@ -1523,18 +1523,18 @@ export default function DisagreementsPage() {
                       </li>
                       <li>
                         <strong>REC-1088 (LOC-103, Adjustment omitted):</strong> System A is <code>₹1,38,948.30</code>;
-                        System B posted pre-GST <code>base_value</code> <code>₹1,08,553.36</code> (omitted 28% GST{' '}
-                        <code>₹30,394.94</code>).
+                        System B matches <code>base_value</code> <code>₹1,08,553.36</code> without adjustment{' '}
+                        <code>₹30,394.94</code>.
                       </li>
                       <li>
                         <strong>REC-1077 (LOC-102, Cross-tenant):</strong> System A is in <code>LOC-102</code> (
-                        <code>ORG-A</code>, <code>₹83,361.40</code>), but System B booked <code>ENT/2026/4077</code> in{' '}
+                        <code>ORG-A</code>, <code>₹83,361.40</code>), while System B <code>ENT/2026/4077</code> is in{' '}
                         <code>LOC-201</code> (<code>ORG-B</code>).
                       </li>
                       <li>
                         <strong>REC-1027 (LOC-102, Adjustment omitted):</strong> System A is <code>₹79,259.03</code>;
-                        System B posted pre-GST <code>base_value</code> <code>₹61,921.12</code> (omitted 28% GST{' '}
-                        <code>₹17,337.91</code>).
+                        System B matches <code>base_value</code> <code>₹61,921.12</code> without adjustment{' '}
+                        <code>₹17,337.91</code>.
                       </li>
                       <li>
                         <strong>REC-1999 (LOC-102, Orphan in B):</strong> System B <code>ENT/2026/4901</code> (
@@ -1556,8 +1556,8 @@ export default function DisagreementsPage() {
                       </li>
                       <li>
                         <strong>REC-1003 (LOC-202, Adjustment omitted):</strong> System A is <code>₹1,21,388.01</code>;
-                        System B posted pre-GST <code>base_value</code> <code>₹94,834.38</code> (omitted 28% GST{' '}
-                        <code>₹26,553.63</code>).
+                        System B matches <code>base_value</code> <code>₹94,834.38</code> without adjustment{' '}
+                        <code>₹26,553.63</code>.
                       </li>
                       <li>
                         <strong>REC-1009 (LOC-201, Date mismatch):</strong> Both have <code>₹1,11,699.30</code>, but

@@ -31,10 +31,12 @@ class Disagreement:
     system_a_raw: str
     system_b_value: str | None
     system_b_raw: str
-    sort_value: float
+    sort_value: Decimal
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        data['sort_value'] = float(self.sort_value)
+        return data
 
 
 def _fmt_dec(val: Decimal | None) -> str | None:
@@ -71,7 +73,7 @@ def _build_disagreement(
         system_a_raw=a_raw,
         system_b_value=_fmt_dec(b_val),
         system_b_raw=b_raw,
-        sort_value=float(max(candidates)) if candidates else 0.0,
+        sort_value=max(candidates, default=Decimal('0.00')),
     )
 
 
@@ -99,16 +101,19 @@ def _for_record(
 
 
 def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> Disagreement | None:
-    all_parseable = not rec.value_parse_error and all(
-        not e.value_parse_error and e.value is not None for e in entries
-    )
+    raw_parts = ' + '.join(f'{e.entry_id}: {e.raw_value or "(blank)"}' for e in entries)
+    if rec.value_parse_error or any(e.value_parse_error or e.value is None for e in entries):
+        return _for_record(
+            rec,
+            reason='UNPARSEABLE_VALUE',
+            detail=f'Multiple System B entries with blank or unparseable value ({raw_parts}).',
+            a_raw=rec.raw_total_value or '(blank)',
+            b_val=None,
+            b_raw=raw_parts,
+        )
+
     summed_b = sum((e.value for e in entries if e.value is not None), Decimal('0.00'))
-    is_valid_split = (
-        all_parseable
-        and rec.total_value is not None
-        and summed_b == rec.total_value
-    )
-    if is_valid_split:
+    if rec.total_value is not None and summed_b == rec.total_value:
         for entry in entries:
             if rec.location_id_raw != entry.location_id_raw:
                 return _for_record(
@@ -129,12 +134,27 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
                 )
         return None
 
-    raw_parts = ' + '.join(f'{e.entry_id}: {e.raw_value or "(blank)"}' for e in entries)
+    distinct_vals = {e.value for e in entries if e.value is not None}
+    is_repeated_posting = len(distinct_vals) == 1 or (
+        rec.total_value is not None and any(e.value == rec.total_value for e in entries)
+    )
+    if is_repeated_posting:
+        return _for_record(
+            rec,
+            reason='DUPLICATE_IN_B',
+            detail=f'Entered {len(entries)} times in System B ({raw_parts}).',
+            b_val=summed_b,
+            b_raw=raw_parts,
+        )
+
     return _for_record(
         rec,
-        reason='DUPLICATE_IN_B',
-        detail=f'Entered {len(entries)} times in System B ({raw_parts}).',
-        b_val=summed_b if all_parseable else None,
+        reason='VALUE_MISMATCH',
+        detail=(
+            f'System A total ({_fmt_dec(rec.total_value)}) differs from System B '
+            f'{len(entries)}-entry sum ({_fmt_dec(summed_b)}: {raw_parts}).'
+        ),
+        b_val=summed_b,
         b_raw=raw_parts,
     )
 
