@@ -153,7 +153,7 @@ def _reconcile_multi_entry(rec: SystemARecord, entries: list[SystemBEntry]) -> D
             entries=entries,
         )
 
-    summed_b = sum((e.value for e in entries if e.value is not None), Decimal('0.00'))
+    summed_b = sum((e.value for e in entries), Decimal('0.00'))
     if rec.total_value is not None and summed_b == rec.total_value:
         for entry in entries:
             if rec.location_id_raw != entry.location_id_raw:
@@ -367,39 +367,29 @@ def _reconcile_orphan_entries(
     rows: list[Disagreement] = []
     for entry in entries:
         loc_id, loc_name = _location_meta(entry)
-        prov = _entry_provenance([entry])
         if in_other_org:
-            rows.append(
-                _build_disagreement(
-                    record_id=ref or entry.entry_id,
-                    reason='TENANT_MISMATCH',
-                    detail=f'{entry.entry_id} points to a record belonging to another org (redacted).',
-                    location_id=loc_id,
-                    location_name=loc_name,
-                    a_val=None,
-                    a_raw='Redacted (other org)',
-                    b_val=entry.value,
-                    b_raw=entry.raw_value or '(blank)',
-                    b_date=entry.raw_recorded_on or None,
-                    b_rows=prov,
-                )
-            )
+            reason = 'TENANT_MISMATCH'
+            detail = f'{entry.entry_id} points to a record belonging to another org (redacted).'
+            a_raw = 'Redacted (other org)'
         else:
-            rows.append(
-                _build_disagreement(
-                    record_id=ref or entry.entry_id,
-                    reason='ORPHAN_IN_B',
-                    detail=f'{entry.entry_id} points to {entry.raw_record_ref!r}, which does not exist in System A.',
-                    location_id=loc_id,
-                    location_name=loc_name,
-                    a_val=None,
-                    a_raw='-',
-                    b_val=entry.value,
-                    b_raw=entry.raw_value or '(blank)',
-                    b_date=entry.raw_recorded_on or None,
-                    b_rows=prov,
-                )
+            reason = 'ORPHAN_IN_B'
+            detail = f'{entry.entry_id} points to {entry.raw_record_ref!r}, which does not exist in System A.'
+            a_raw = '-'
+        rows.append(
+            _build_disagreement(
+                record_id=ref or entry.entry_id,
+                reason=reason,
+                detail=detail,
+                location_id=loc_id,
+                location_name=loc_name,
+                a_val=None,
+                a_raw=a_raw,
+                b_val=entry.value,
+                b_raw=entry.raw_value or '(blank)',
+                b_date=entry.raw_recorded_on or None,
+                b_rows=_entry_provenance([entry]),
             )
+        )
     return rows
 
 

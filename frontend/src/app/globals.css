@@ -11,11 +11,9 @@
   --primary-foreground: #f9fbff;
   --secondary: #1e1e1e;
   --muted: #2a2a2a;
-  --muted-hover: #333333;
   --muted-foreground: #7f7f7f;
   --soft: #a4a4a4;
   --subtle: #676767;
-  --chip: #cfcfcf;
   --border: #232323;
   --line-strong: #393939;
   --ring: #676767;
@@ -24,8 +22,6 @@
   --success: #22c55e;
   --warning: #fbbf24;
   --danger: #f97373;
-  --trend: #00b562;
-  --trend-muted: #395e4d;
   --thead-bg: #18191b;
   --divider-soft: rgba(255, 255, 255, 0.08);
   --meter-bg: rgba(255, 255, 255, 0.08);
@@ -72,9 +68,7 @@
     0px 16px 40px 0px rgba(0, 0, 0, 0.5),
     0px 0px 0px 1px #0e0e0e;
 
-  --ease-power3-in: cubic-bezier(0.5, 0, 0.75, 0);
   --ease-power3-out: cubic-bezier(0.25, 1, 0.5, 1);
-  --ease-power4-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-ui: cubic-bezier(0.2, 0, 0, 1);
 }
@@ -91,11 +85,9 @@
   --primary-foreground: #ffffff;
   --secondary: #ffffff;
   --muted: #eef0f5;
-  --muted-hover: #e5e8f0;
   --muted-foreground: #636b78;
   --soft: #434a57;
   --subtle: #6e7787;
-  --chip: #2d333f;
   --border: #e5e7ee;
   --line-strong: #cfd4e0;
   --ring: #4124fb;
@@ -104,8 +96,6 @@
   --success: #16a34a;
   --warning: #d97706;
   --danger: #e11d48;
-  --trend: #0d9f53;
-  --trend-muted: #a9d5bc;
   --thead-bg: #f3f5f9;
   --divider-soft: rgba(17, 19, 24, 0.09);
   --meter-bg: rgba(17, 19, 24, 0.06);
@@ -680,11 +670,9 @@ code,
   inset-inline-end: 8px;
   top: 50%;
   transform: translateY(-50%);
-  color: #898b8d;
+  color: var(--subtle);
   pointer-events: none;
-  transition:
-    transform 200ms var(--ease-power3-out),
-    color 150ms var(--ease-power3-out);
+  transition: color 150ms var(--ease-power3-out);
 }
 
 .crm-btn {

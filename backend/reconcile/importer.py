@@ -127,7 +127,7 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
                 total_value=total_val,
                 raw_total_value=row.get('total_value') or '',
                 value_parse_error=total_err,
-                state=(row.get('state') or 'CONFIRMED').strip().upper(),
+                state=(row.get('state') or '').strip().upper() or 'CONFIRMED',
                 source_row=row_num,
             )
             a_count += 1

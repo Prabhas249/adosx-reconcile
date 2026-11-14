@@ -1,3 +1,4 @@
+import tempfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -31,7 +32,7 @@ class ReconciliationTests(TestCase):
             location=loc,
             location_id_raw=loc.location_id,
             event_date=event_date,
-            raw_event_date=event_date.isoformat(),
+            raw_event_date=event_date.isoformat() if event_date else '',
             total_value=Decimal(total) if total is not None else None,
             raw_total_value=total or '',
             value_parse_error=total is None,
@@ -56,7 +57,7 @@ class ReconciliationTests(TestCase):
             location=loc,
             location_id_raw=loc.location_id,
             recorded_on=recorded_on,
-            raw_recorded_on=recorded_on.isoformat(),
+            raw_recorded_on=recorded_on.isoformat() if recorded_on else '',
             value=val,
             raw_value=raw_value,
             value_parse_error=err,
@@ -342,8 +343,6 @@ class ReconciliationTests(TestCase):
         self.assertEqual(rows[0]['system_b_value'], '1250.00')
 
     def test_importer_preserves_duplicate_keys_and_reports_unmapped_locations(self):
-        import tempfile
-
         with tempfile.TemporaryDirectory() as tmp:
             tmp_dir = Path(tmp)
             (tmp_dir / 'locations.csv').write_text(

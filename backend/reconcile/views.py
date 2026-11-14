@@ -34,11 +34,13 @@ def list_disagreements(request):
     sort = request.query_params.get('sort', '').strip() or None
 
     try:
-        rows = find_disagreements(org_id=org_id, reason_filter=reason, sort_order=sort)
-        org_rows = find_disagreements(org_id=org_id) if reason else rows
+        org_rows = find_disagreements(org_id=org_id, sort_order=sort)
+        if reason and reason not in REASON_LABELS:
+            raise ValueError(f'Unknown reason: {reason!r}')
     except ValueError as exc:
         return Response({'error': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+    rows = [r for r in org_rows if r['reason'] == reason] if reason else org_rows
     max_sort = max((Decimal(r['sort_value']) for r in org_rows), default=Decimal('0.00'))
     reason_counts = dict(Counter(r['reason'] for r in org_rows))
 
