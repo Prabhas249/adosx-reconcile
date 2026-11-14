@@ -2,6 +2,7 @@
 
 import type { CSSProperties, KeyboardEvent, MouseEvent } from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 interface Disagreement {
   record_id: string;
@@ -22,10 +23,22 @@ interface ReasonOption {
   label: string;
 }
 
-type TagTone = 'red' | 'orange' | 'amber' | 'blue' | 'purple' | 'yellow' | 'green' | 'neutral';
-type MeterTone = 'primary' | 'blue' | 'amber' | 'red';
+type TagTone =
+  | 'red'
+  | 'orange'
+  | 'amber'
+  | 'blue'
+  | 'purple'
+  | 'yellow'
+  | 'green'
+  | 'moss'
+  | 'neutral';
+
+type SegmentTone = 'auto' | 'danger' | 'warning' | 'success';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://127.0.0.1:8000/api';
+const THEME_KEY = 'adosx-theme';
+const TREND_PATTERN = [false, true, false, false, true, true, false, true, false, true, true, true];
 
 function getReasonTone(reason: string): TagTone {
   if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'red';
@@ -35,6 +48,92 @@ function getReasonTone(reason: string): TagTone {
   if (reason === 'DUPLICATE_IN_B') return 'purple';
   if (reason === 'UNPARSEABLE_VALUE') return 'yellow';
   return 'neutral';
+}
+
+function getSecondaryTag(row: Disagreement): { label: string; tone: TagTone } {
+  if (row.detail.includes('base_value')) {
+    return { label: 'Adjustment omitted', tone: 'green' };
+  }
+  if (row.reason === 'TENANT_MISMATCH') {
+    return { label: 'Redacted', tone: 'orange' };
+  }
+  if (row.reason === 'VOIDED_IN_A') {
+    return { label: 'Active in B', tone: 'amber' };
+  }
+  if (row.reason === 'DUPLICATE_IN_B') {
+    return { label: '2x in B', tone: 'blue' };
+  }
+  if (row.reason === 'MISSING_IN_B') {
+    return { label: 'System A only', tone: 'moss' };
+  }
+  if (row.reason === 'ORPHAN_IN_B') {
+    return { label: 'System B only', tone: 'purple' };
+  }
+  if (row.reason === 'UNPARSEABLE_VALUE') {
+    return { label: 'Format error', tone: 'amber' };
+  }
+  if (row.reason === 'DATE_MISMATCH') {
+    return { label: 'Period drift', tone: 'blue' };
+  }
+  return { label: 'Net delta', tone: 'green' };
+}
+
+function getAuditSteps(row: Disagreement, org: string): string[] {
+  const steps: string[] = [];
+  steps.push(
+    `Scoped query filtered to organization ${org} at ${row.location_name} (${row.location_id}).`,
+  );
+  if (row.detail.includes('base_value')) {
+    steps.push(
+      'System B recorded only System A base_value and dropped the adjustment column during posting.',
+    );
+  } else if (row.reason === 'DUPLICATE_IN_B') {
+    steps.push(
+      'Multiple non-split System B entries share the same normalized record reference without Part indicators.',
+    );
+  } else if (row.reason === 'TENANT_MISMATCH') {
+    steps.push(
+      'System B holds a matching reference under a foreign tenant; server redacted foreign org ID and values.',
+    );
+  } else if (row.reason === 'VOIDED_IN_A') {
+    steps.push(
+      'Record is marked VOIDED in System A but remains active with a posted amount in System B.',
+    );
+  } else if (row.reason === 'MISSING_IN_B') {
+    steps.push('Active System A record has zero corresponding entries in System B.');
+  } else if (row.reason === 'ORPHAN_IN_B') {
+    steps.push('System B entry references a record ID that does not exist in System A.');
+  } else if (row.reason === 'UNPARSEABLE_VALUE') {
+    steps.push('Raw value string in CSV could not be parsed into a valid decimal amount.');
+  } else {
+    steps.push(row.detail);
+  }
+  return steps;
+}
+
+function buildSparklineValues(row: Disagreement, maxExposure: number): number[] {
+  const a = row.system_a_value !== null ? Math.abs(Number(row.system_a_value)) || 0 : 0;
+  const b = row.system_b_value !== null ? Math.abs(Number(row.system_b_value)) || 0 : 0;
+  const delta = Math.abs(a - b);
+  const top = Math.max(1, maxExposure);
+  const rA = Math.max(2, Math.min(14, Math.round((a / top) * 14)));
+  const rB = Math.max(2, Math.min(14, Math.round((b / top) * 14)));
+  const rD = Math.max(2, Math.min(14, Math.round((delta / top) * 14)));
+  const rS = Math.max(3, Math.min(14, Math.round((row.sort_value / top) * 14)));
+  return [
+    Math.max(2, rA - 3),
+    rA,
+    Math.max(2, Math.round((rA + rB) / 2)),
+    rB,
+    Math.max(2, rD - 2),
+    rD,
+    Math.max(2, rS - 4),
+    Math.max(3, rA - 1),
+    rB,
+    Math.max(3, rD),
+    Math.max(4, rS - 2),
+    rS,
+  ];
 }
 
 function formatMoney(amount: number): string {
@@ -50,6 +149,66 @@ function escapeCsvCell(value: string | number | null): string {
     return `"${text.replace(/"/g, '""')}"`;
   }
   return text;
+}
+
+function autoSegmentTone(index: number, filled: number): 'danger' | 'warning' | 'success' {
+  const red = Math.floor(filled / 3);
+  const amber = Math.ceil(filled / 3);
+  if (index < red) return 'danger';
+  if (index < red + amber) return 'warning';
+  return 'success';
+}
+
+function SegmentBar({
+  percent,
+  segments = 17,
+  tone = 'auto',
+}: {
+  percent: number;
+  segments?: number;
+  tone?: SegmentTone;
+}) {
+  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
+  const filled = Math.max(clamped > 0 ? 1 : 0, Math.round((clamped / 100) * segments));
+
+  return (
+    <span
+      role="meter"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={clamped}
+      className="segment-bar"
+    >
+      {Array.from({ length: segments }, (_, index) => {
+        const isFilled = index < filled;
+        const tickTone = isFilled
+          ? tone === 'auto'
+            ? autoSegmentTone(index, filled)
+            : tone
+          : undefined;
+        return <span key={index} className="segment-tick" data-tone={tickTone} />;
+      })}
+    </span>
+  );
+}
+
+function Sparkline({ values }: { values: number[] }) {
+  return (
+    <span aria-hidden="true" className="sparkline">
+      {values.map((v, idx) => {
+        const h = Math.min(14, Math.max(2, Math.round(v)));
+        const bright = TREND_PATTERN[idx % TREND_PATTERN.length];
+        return (
+          <span
+            key={idx}
+            className="sparkline-bar"
+            data-bright={bright ? 'true' : 'false'}
+            style={{ height: `${h}px` }}
+          />
+        );
+      })}
+    </span>
+  );
 }
 
 function ChevronDownIcon() {
@@ -108,15 +267,14 @@ function ShareExportIcon() {
   );
 }
 
-function RefreshIcon() {
+function PlusSparkIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
       <path
-        d="M13.25 8A5.25 5.25 0 1 1 11.7 4.3M13.25 2.75v2.75H10.5"
+        d="M8 3.25v9.5M3.25 8h9.5"
         stroke="currentColor"
-        strokeWidth="1.5"
+        strokeWidth="1.6"
         strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );
@@ -129,37 +287,6 @@ function DotsHorizontalIcon() {
       <circle cx="8" cy="8" r="1.2" fill="currentColor" />
       <circle cx="12.5" cy="8" r="1.2" fill="currentColor" />
     </svg>
-  );
-}
-
-function SegmentBar({
-  percent,
-  tone,
-  segments = 15,
-}: {
-  percent: number;
-  tone: MeterTone;
-  segments?: number;
-}) {
-  const clamped = Math.max(0, Math.min(100, Math.round(percent)));
-  const filled = Math.round((clamped / 100) * segments);
-  return (
-    <span
-      role="meter"
-      aria-valuemin={0}
-      aria-valuemax={100}
-      aria-valuenow={clamped}
-      className="segment-bar"
-    >
-      {Array.from({ length: segments }, (_, index) => (
-        <span
-          key={index}
-          className="segment-tick"
-          data-filled={index < filled ? 'true' : 'false'}
-          data-tone={tone}
-        />
-      ))}
-    </span>
   );
 }
 
@@ -219,16 +346,18 @@ function ValueCell({
   raw: string;
 }) {
   const showRaw = Boolean(raw) && raw !== parsed && !(parsed === null && raw === '-');
+  const formatted =
+    parsed !== null && !Number.isNaN(Number(parsed)) ? formatMoney(Number(parsed)) : parsed;
   return (
     <td className="num tabular" data-label={label}>
       <div className="val-wrap">
-        {parsed !== null ? (
-          <span className="val-parsed mono">
+        {formatted !== null ? (
+          <span className="val-parsed">
             <span className="val-currency">$</span>
-            <span>{parsed}</span>
+            <span>{formatted}</span>
           </span>
         ) : (
-          <span className="val-parsed val-missing mono">-</span>
+          <span className="val-parsed val-missing">-</span>
         )}
         {showRaw && <span className="val-raw mono">raw: {raw}</span>}
       </div>
@@ -250,10 +379,86 @@ export default function DisagreementsPage() {
   const [activeRow, setActiveRow] = useState<Disagreement | null>(null);
   const [renderBatch, setRenderBatch] = useState<number>(0);
   const [reloadKey, setReloadKey] = useState<number>(0);
+  const [isDark, setIsDark] = useState<boolean>(true);
+  const [themeMoved, setThemeMoved] = useState<boolean>(false);
 
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const lastTriggerRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(THEME_KEY);
+      const dark = saved !== 'light';
+      setIsDark(dark);
+      document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    } catch {
+      setIsDark(true);
+    }
+  }, []);
+
+  const applyThemeDom = (dark: boolean) => {
+    const mode = dark ? 'dark' : 'light';
+    document.documentElement.dataset.theme = mode;
+    const meta = document.querySelector('meta[name="color-scheme"]');
+    if (meta) meta.setAttribute('content', mode);
+    try {
+      localStorage.setItem(THEME_KEY, mode);
+    } catch {}
+  };
+
+  const toggleTheme = (e: MouseEvent<HTMLButtonElement>) => {
+    const nextDark = !isDark;
+    setThemeMoved(true);
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const docWithTransition = document as Document & {
+      startViewTransition?: (cb: () => void) => { ready: Promise<void> };
+    };
+
+    if (!docWithTransition.startViewTransition || reduce) {
+      const style = document.createElement('style');
+      style.textContent = '*,*::before,*::after{transition:none !important}';
+      document.head.appendChild(style);
+      applyThemeDom(nextDark);
+      setIsDark(nextDark);
+      void document.documentElement.offsetHeight;
+      requestAnimationFrame(() => style.remove());
+      return;
+    }
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const radius = Math.hypot(
+      Math.max(x, window.innerWidth - x),
+      Math.max(y, window.innerHeight - y),
+    );
+
+    const transition = docWithTransition.startViewTransition(() => {
+      applyThemeDom(nextDark);
+      flushSync(() => {
+        setIsDark(nextDark);
+      });
+    });
+
+    transition.ready
+      .then(() => {
+        document.documentElement.animate(
+          {
+            clipPath: [
+              `circle(0px at ${x}px ${y}px)`,
+              `circle(${radius}px at ${x}px ${y}px)`,
+            ],
+          },
+          {
+            duration: 500,
+            easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+            pseudoElement: '::view-transition-new(root)',
+          },
+        );
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -479,11 +684,11 @@ export default function DisagreementsPage() {
         <header className="crm-header">
           <div className="crm-header-left">
             <div className="crm-title-row">
-              <span className="crm-brand-pill">
-                <span className="crm-status-dot" aria-hidden="true" />
-                <span>ADOSX Reconcile</span>
-              </span>
               <h1 className="crm-title">System A and System B Disagreements</h1>
+              <span className="crm-status-pill">
+                <span className="crm-status-dot" aria-hidden="true" />
+                <span>Active</span>
+              </span>
             </div>
             <p className="crm-subtitle">
               Reconciles imported event totals, dates, and references strictly inside the selected org boundary.
@@ -502,7 +707,7 @@ export default function DisagreementsPage() {
                 />
               </svg>
               <span>Scoped to</span>
-              <strong className="mono">{selectedOrg || '...'}</strong>
+              <strong>{selectedOrg || '...'}</strong>
             </span>
 
             <div className="org-segmented" role="group" aria-label="Select organization">
@@ -525,7 +730,7 @@ export default function DisagreementsPage() {
                   <button
                     key={org}
                     type="button"
-                    className="org-segmented-btn mono"
+                    className="org-segmented-btn"
                     aria-pressed={selectedOrg === org}
                     onClick={() => setSelectedOrg(org)}
                   >
@@ -534,6 +739,39 @@ export default function DisagreementsPage() {
                 ))
               )}
             </div>
+
+            <button
+              type="button"
+              className="theme-toggle"
+              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              onClick={toggleTheme}
+            >
+              <svg
+                className={`${isDark ? 'theme-icon hide' : 'theme-icon'}${themeMoved ? ' anim' : ''}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+              </svg>
+              <svg
+                className={`${isDark ? 'theme-icon' : 'theme-icon hide'}${themeMoved ? ' anim' : ''}`}
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                aria-hidden="true"
+              >
+                <circle cx="12" cy="12" r="4" />
+                <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" />
+              </svg>
+            </button>
           </div>
         </header>
 
@@ -546,13 +784,13 @@ export default function DisagreementsPage() {
           >
             <div className="kpi-top">
               <span className="kpi-label">Visible Disagreements</span>
-              <span className="crm-tag" data-tone="neutral">
+              <span className="crm-tag crm-tag-sm" data-tone="green">
                 All reasons
               </span>
             </div>
             <div className="kpi-bottom">
               <span className="kpi-value tabular">{metrics.total}</span>
-              <SegmentBar percent={metrics.total > 0 ? 100 : 0} tone="primary" />
+              <SegmentBar percent={metrics.total > 0 ? 84 : 0} tone="auto" />
             </div>
           </button>
 
@@ -564,13 +802,13 @@ export default function DisagreementsPage() {
           >
             <div className="kpi-top">
               <span className="kpi-label">Value Mismatches</span>
-              <span className="crm-tag" data-tone="blue">
+              <span className="crm-tag crm-tag-sm" data-tone="blue">
                 Delta
               </span>
             </div>
             <div className="kpi-bottom">
               <span className="kpi-value tabular">{metrics.valueCount}</span>
-              <SegmentBar percent={metrics.valuePct} tone="blue" />
+              <SegmentBar percent={metrics.valuePct} tone="auto" />
             </div>
           </button>
 
@@ -582,13 +820,13 @@ export default function DisagreementsPage() {
           >
             <div className="kpi-top">
               <span className="kpi-label">Missing in System B</span>
-              <span className="crm-tag" data-tone="amber">
+              <span className="crm-tag crm-tag-sm" data-tone="amber">
                 Unmatched
               </span>
             </div>
             <div className="kpi-bottom">
               <span className="kpi-value tabular">{metrics.missingCount}</span>
-              <SegmentBar percent={metrics.missingPct} tone="amber" />
+              <SegmentBar percent={metrics.missingPct} tone="auto" />
             </div>
           </button>
 
@@ -600,42 +838,38 @@ export default function DisagreementsPage() {
           >
             <div className="kpi-top">
               <span className="kpi-label">Tenant &amp; Voided Alerts</span>
-              <span className="crm-tag" data-tone="red">
+              <span className="crm-tag crm-tag-sm" data-tone="red">
                 Critical
               </span>
             </div>
             <div className="kpi-bottom">
               <span className="kpi-value tabular">{metrics.criticalCount}</span>
-              <SegmentBar percent={metrics.criticalPct} tone="red" />
+              <SegmentBar percent={metrics.criticalPct} tone="auto" />
             </div>
           </button>
         </section>
 
         <section className="crm-toolbar" aria-label="Filter and sort controls">
           <div className="toolbar-filters">
-            <div className="search-pill">
-              <SearchIcon />
-              <input
-                id="search-input"
-                type="search"
-                name="search"
-                aria-label="Search record or location"
-                autoComplete="off"
-                className="search-pill-input"
-                placeholder="Search REC-1064, LOC-101, reason..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-              />
-              {searchQuery && (
-                <button
-                  type="button"
-                  className="search-clear-btn"
-                  aria-label="Clear search query"
-                  onClick={() => setSearchQuery('')}
+            <div className="filter-pill">
+              <label className="filter-pill-label" htmlFor="sort-select">
+                Sort by
+              </label>
+              <span className="filter-pill-divider" aria-hidden="true" />
+              <div className="filter-pill-select-wrap">
+                <select
+                  id="sort-select"
+                  name="sort"
+                  className="filter-pill-select"
+                  value={sortOrder}
+                  onChange={(e) => setSortOrder(e.target.value)}
                 >
-                  ×
-                </button>
-              )}
+                  <option value="value_desc">Highest Value</option>
+                  <option value="value_asc">Lowest Value</option>
+                  <option value="">Record ID (A-Z)</option>
+                </select>
+                <ChevronDownIcon />
+              </div>
             </div>
 
             <div className="filter-pill">
@@ -651,7 +885,7 @@ export default function DisagreementsPage() {
                   value={selectedReason}
                   onChange={(e) => setSelectedReason(e.target.value)}
                 >
-                  <option value="">All reasons</option>
+                  <option value="">All Reasons</option>
                   {reasons.map((r) => (
                     <option key={r.code} value={r.code}>
                       {r.label}
@@ -662,25 +896,29 @@ export default function DisagreementsPage() {
               </div>
             </div>
 
-            <div className="filter-pill">
-              <label className="filter-pill-label" htmlFor="sort-select">
-                Sort by
-              </label>
-              <span className="filter-pill-divider" aria-hidden="true" />
-              <div className="filter-pill-select-wrap">
-                <select
-                  id="sort-select"
-                  name="sort"
-                  className="filter-pill-select"
-                  value={sortOrder}
-                  onChange={(e) => setSortOrder(e.target.value)}
+            <div className="search-pill">
+              <SearchIcon />
+              <input
+                id="search-input"
+                type="search"
+                name="search"
+                aria-label="Search record or location"
+                autoComplete="off"
+                className="search-pill-input"
+                placeholder="Filter REC-1064, LOC-101..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  className="search-clear-btn"
+                  aria-label="Clear search query"
+                  onClick={() => setSearchQuery('')}
                 >
-                  <option value="value_desc">Highest value first</option>
-                  <option value="value_asc">Lowest value first</option>
-                  <option value="">Record ID (A-Z)</option>
-                </select>
-                <ChevronDownIcon />
-              </div>
+                  ×
+                </button>
+              )}
             </div>
 
             {hasFilters && (
@@ -693,7 +931,7 @@ export default function DisagreementsPage() {
                   setSortOrder('value_desc');
                 }}
               >
-                Reset filters
+                Reset
               </button>
             )}
           </div>
@@ -706,15 +944,15 @@ export default function DisagreementsPage() {
               disabled={visibleRows.length === 0}
             >
               <ShareExportIcon />
-              <span>Export CSV</span>
+              <span>Export</span>
             </button>
             <button
               type="button"
               className="crm-btn crm-btn-primary"
               onClick={() => setReloadKey((k) => k + 1)}
             >
-              <RefreshIcon />
-              <span>Re-sync</span>
+              <PlusSparkIcon />
+              <span>Re-sync Ledger</span>
             </button>
           </div>
         </section>
@@ -769,19 +1007,28 @@ export default function DisagreementsPage() {
                   <tr>
                     <th>Record ID</th>
                     <th>Location</th>
-                    <th>Reason</th>
+                    <th>Reason &amp; Stage</th>
                     <th className="num">System A Value</th>
                     <th className="num">System B Value</th>
+                    <th className="num">Exposure Share</th>
+                    <th>Variance Trend</th>
                     <th>Diagnostic Detail</th>
                   </tr>
                 </thead>
                 <tbody>
                   {visibleRows.map((row, idx) => {
                     const tone = getReasonTone(row.reason);
+                    const secondary = getSecondaryTag(row);
                     const rowKey = `${row.record_id}-${row.reason}-${row.system_a_raw}-${row.system_b_raw}`;
                     const isSelected =
                       activeRow?.record_id === row.record_id && activeRow?.reason === row.reason;
                     const delay = Math.min(idx, 8) * 24;
+                    const exposurePct =
+                      metrics.maxExposure > 0
+                        ? Math.max(8, Math.round((row.sort_value / metrics.maxExposure) * 100))
+                        : 0;
+                    const sparkValues = buildSparklineValues(row, metrics.maxExposure);
+
                     return (
                       <tr
                         key={`${renderBatch}-${rowKey}`}
@@ -795,19 +1042,26 @@ export default function DisagreementsPage() {
                       >
                         <td data-label="Record ID">
                           <div className="record-cell">
-                            <code className="record-id mono">{row.record_id}</code>
+                            <span className="record-id">{row.record_id}</span>
                             <CopyIdButton value={row.record_id} />
                           </div>
                         </td>
                         <td data-label="Location">
                           <div className="location-cell">
                             <span className="location-name">{row.location_name}</span>
-                            <span className="location-code mono">{row.location_id}</span>
+                            <span className="crm-tag crm-tag-sm" data-tone="neutral">
+                              {row.location_id}
+                            </span>
                           </div>
                         </td>
-                        <td data-label="Reason">
-                          <span className="crm-tag" data-tone={tone}>
-                            {row.reason_label}
+                        <td data-label="Reason & Stage">
+                          <span className="crm-tag-row">
+                            <span className="crm-tag" data-tone={tone}>
+                              {row.reason_label}
+                            </span>
+                            <span className="crm-tag" data-tone={secondary.tone}>
+                              {secondary.label}
+                            </span>
                           </span>
                         </td>
                         <ValueCell
@@ -820,6 +1074,15 @@ export default function DisagreementsPage() {
                           parsed={row.system_b_value}
                           raw={row.system_b_raw}
                         />
+                        <td className="num tabular" data-label="Exposure Share">
+                          <span className="exposure-cell">
+                            <SegmentBar percent={exposurePct} tone="auto" />
+                            <span className="exposure-pct">{exposurePct}%</span>
+                          </span>
+                        </td>
+                        <td data-label="Variance Trend">
+                          <Sparkline values={sparkValues} />
+                        </td>
                         <td data-label="Diagnostic Detail">
                           <div className="detail-cell">
                             <span className="detail-text">{row.detail}</span>
@@ -851,16 +1114,16 @@ export default function DisagreementsPage() {
               <span>Disagreement{visibleRows.length === 1 ? '' : 's'} in view</span>
             </div>
             <div className="footer-cell tabular">
-              <span>Sum System A</span>
-              <strong className="mono">${formatMoney(metrics.sumA)}</strong>
+              <span>+ Sum of System A</span>
+              <strong>${formatMoney(metrics.sumA)}</strong>
             </div>
             <div className="footer-cell tabular">
-              <span>Sum System B</span>
-              <strong className="mono">${formatMoney(metrics.sumB)}</strong>
+              <span>+ Sum of System B</span>
+              <strong>${formatMoney(metrics.sumB)}</strong>
             </div>
             <div className="footer-cell tabular">
-              <span>Peak Exposure</span>
-              <strong className="mono">${formatMoney(metrics.maxExposure)}</strong>
+              <span>+ Peak Exposure</span>
+              <strong>${formatMoney(metrics.maxExposure)}</strong>
             </div>
           </footer>
         </section>
@@ -882,7 +1145,7 @@ export default function DisagreementsPage() {
           >
             <div className="sheet-header">
               <div className="sheet-header-left">
-                <h2 id="sheet-title" className="sheet-title mono">
+                <h2 id="sheet-title" className="sheet-title">
                   {activeRow.record_id}
                 </h2>
                 <CopyIdButton value={activeRow.record_id} />
@@ -902,9 +1165,15 @@ export default function DisagreementsPage() {
 
             <div className="sheet-body">
               <div className="sheet-meta-row">
-                <span className="location-code mono">{selectedOrg}</span>
-                <span className="location-code mono">{activeRow.location_id}</span>
-                <span className="location-name">{activeRow.location_name}</span>
+                <span className="crm-tag crm-tag-sm" data-tone="neutral">
+                  {selectedOrg}
+                </span>
+                <span className="crm-tag crm-tag-sm" data-tone="neutral">
+                  {activeRow.location_id}
+                </span>
+                <span className="crm-tag crm-tag-sm" data-tone={getSecondaryTag(activeRow).tone}>
+                  {getSecondaryTag(activeRow).label}
+                </span>
               </div>
 
               <div className="sheet-detail-card">{activeRow.detail}</div>
@@ -912,8 +1181,10 @@ export default function DisagreementsPage() {
               <div className="sheet-compare-grid">
                 <div className="sheet-box">
                   <span className="sheet-box-label">System A</span>
-                  <span className="sheet-box-value mono tabular">
-                    {activeRow.system_a_value !== null ? `$${activeRow.system_a_value}` : '-'}
+                  <span className="sheet-box-value tabular">
+                    {activeRow.system_a_value !== null
+                      ? `$${formatMoney(Number(activeRow.system_a_value))}`
+                      : '-'}
                   </span>
                   <span className="sheet-box-raw mono">
                     raw: {activeRow.system_a_raw || '(none)'}
@@ -921,13 +1192,24 @@ export default function DisagreementsPage() {
                 </div>
                 <div className="sheet-box">
                   <span className="sheet-box-label">System B</span>
-                  <span className="sheet-box-value mono tabular">
-                    {activeRow.system_b_value !== null ? `$${activeRow.system_b_value}` : '-'}
+                  <span className="sheet-box-value tabular">
+                    {activeRow.system_b_value !== null
+                      ? `$${formatMoney(Number(activeRow.system_b_value))}`
+                      : '-'}
                   </span>
                   <span className="sheet-box-raw mono">
                     raw: {activeRow.system_b_raw || '(none)'}
                   </span>
                 </div>
+              </div>
+
+              <div className="sheet-box">
+                <span className="sheet-box-label">Reconciliation Audit Breakdown</span>
+                <ul className="sheet-audit-list">
+                  {getAuditSteps(activeRow, selectedOrg).map((step, i) => (
+                    <li key={i}>{step}</li>
+                  ))}
+                </ul>
               </div>
 
               <div className="sheet-box">
@@ -944,7 +1226,7 @@ export default function DisagreementsPage() {
             </div>
 
             <div className="sheet-footer">
-              <span className="sheet-footer-note mono">
+              <span className="sheet-footer-note mono tabular">
                 sort_value: ${formatMoney(activeRow.sort_value)}
               </span>
               <button
