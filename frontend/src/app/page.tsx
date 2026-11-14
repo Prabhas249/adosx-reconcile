@@ -75,6 +75,7 @@ export default function DisagreementsPage() {
   const drawerRef = useRef<HTMLElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const lastTriggerRef = useRef<HTMLElement | null>(null);
+  const loadedOrgRef = useRef<string>('');
 
   useEffect(() => {
     try {
@@ -154,7 +155,9 @@ export default function DisagreementsPage() {
         return res.json();
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
         const fetchedOrgs: string[] = Array.isArray(data.orgs) ? data.orgs : [];
+        setError(null);
         setOrgs(fetchedOrgs);
         if (fetchedOrgs.length > 0) {
           setSelectedOrg((prev) => (fetchedOrgs.includes(prev) ? prev : fetchedOrgs[0]));
@@ -180,6 +183,15 @@ export default function DisagreementsPage() {
   useEffect(() => {
     if (!selectedOrg) return;
     const controller = new AbortController();
+    const switchingOrg = loadedOrgRef.current !== selectedOrg;
+    if (switchingOrg) {
+      loadedOrgRef.current = '';
+      setRows([]);
+      setOrgTotalCount(0);
+      setOrgMaxSortValue(0);
+      setOrgReasonCounts({});
+      setHasLoadedRows(false);
+    }
     setLoading(true);
     setError(null);
     setActiveRow(null);
@@ -194,7 +206,9 @@ export default function DisagreementsPage() {
         return res.json();
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
         const fetched: Disagreement[] = data.disagreements || [];
+        loadedOrgRef.current = selectedOrg;
         setRows(fetched);
         setOrgTotalCount(
           typeof data.total_org_count === 'number' ? data.total_org_count : fetched.length,
@@ -210,6 +224,13 @@ export default function DisagreementsPage() {
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
+        if (loadedOrgRef.current !== selectedOrg) {
+          setRows([]);
+          setOrgTotalCount(0);
+          setOrgMaxSortValue(0);
+          setOrgReasonCounts({});
+          setHasLoadedRows(false);
+        }
         setError(formatFetchError(err));
       })
       .finally(() => {
@@ -680,6 +701,12 @@ export default function DisagreementsPage() {
                   style={{ width: `${96 - idx * 6}%` }}
                 />
               ))}
+            </div>
+          ) : error && visibleRows.length === 0 ? (
+            <div className="empty-state">
+              <p className="empty-title">
+                Unable to load disagreements for {selectedOrg || 'this org'}.
+              </p>
             </div>
           ) : visibleRows.length === 0 ? (
             <div className="empty-state">

@@ -23,7 +23,7 @@ else
 fi
 
 echo "3. TypeScript check"
-npx --prefix "$ROOT/frontend" tsc --noEmit
+npx --prefix "$ROOT/frontend" tsc -p "$ROOT/frontend/tsconfig.json" --noEmit
 
 echo "4. Next.js production build"
 npm --prefix "$ROOT/frontend" run build

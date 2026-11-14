@@ -270,6 +270,8 @@ def _reconcile_record(
                 detail='System B entry exists under a different org (redacted for tenant isolation).',
                 b_raw='Redacted (other org)',
             )
+        if rec.state == 'VOIDED':
+            return None
         return _for_record(
             rec,
             reason='MISSING_IN_B',

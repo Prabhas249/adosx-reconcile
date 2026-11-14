@@ -118,9 +118,9 @@ export function isBaseValueMatch(row: Disagreement): boolean {
 
 export function getReasonTone(reason: string): TagTone {
   if (reason === 'TENANT_MISMATCH' || reason === 'VOIDED_IN_A') return 'red';
-  if (reason === 'MISSING_IN_B') return 'amber';
+  if (reason === 'MISSING_IN_B' || reason === 'LOCATION_MISMATCH') return 'amber';
   if (reason === 'ORPHAN_IN_B') return 'orange';
-  if (reason === 'VALUE_MISMATCH') return 'blue';
+  if (reason === 'VALUE_MISMATCH' || reason === 'DATE_MISMATCH') return 'blue';
   if (reason === 'DUPLICATE_IN_B' || reason === 'MULTI_ENTRY_UNRESOLVED') return 'purple';
   if (reason === 'UNPARSEABLE_VALUE') return 'yellow';
   return 'neutral';
@@ -141,7 +141,10 @@ export function getSecondaryTag(row: Disagreement): { label: string; tone: TagTo
     return { label: `${count}x in B`, tone: 'blue' };
   }
   if (row.reason === 'MULTI_ENTRY_UNRESOLVED') {
-    return { label: `${row.system_b_rows.length} entries`, tone: 'amber' };
+    return {
+      label: row.system_b_rows.length > 0 ? `${row.system_b_rows.length} entries` : 'Duplicate in A',
+      tone: 'amber',
+    };
   }
   if (row.reason === 'MISSING_IN_B') {
     return { label: 'System A only', tone: 'moss' };
@@ -151,6 +154,9 @@ export function getSecondaryTag(row: Disagreement): { label: string; tone: TagTo
   }
   if (row.reason === 'UNPARSEABLE_VALUE') {
     return { label: 'Format error', tone: 'amber' };
+  }
+  if (row.reason === 'LOCATION_MISMATCH') {
+    return { label: 'Location drift', tone: 'amber' };
   }
   if (row.reason === 'DATE_MISMATCH') {
     return { label: 'Period drift', tone: 'blue' };
@@ -180,6 +186,20 @@ export function getAuditSteps(row: Disagreement, org: string): string[] {
     steps.push(row.detail);
   }
   return steps;
+}
+
+function formatUnparseableSource(row: Disagreement): string {
+  const parts: string[] = [];
+  if (row.system_a_value === null) {
+    parts.push(`System A: ${row.system_a_raw || 'blank'}`);
+  }
+  if (row.system_b_value === null) {
+    parts.push(`System B: ${row.system_b_raw || 'blank'}`);
+  }
+  if (parts.length > 0) {
+    return parts.join('; ');
+  }
+  return row.system_b_raw || row.system_a_raw || 'blank';
 }
 
 export function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotTopic): string {
@@ -217,7 +237,7 @@ export function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotT
       return `${row.record_id} has state VOIDED in System A, while System B still holds an active entry (${bFormatted}).`;
     }
     if (row.reason === 'UNPARSEABLE_VALUE') {
-      return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${row.system_b_raw || row.system_a_raw || 'blank'}).`;
+      return `The CSV row was preserved during ingestion with value_parse_error=True because the raw value cell was blank or malformed (${formatUnparseableSource(row)}).`;
     }
     return row.detail;
   }
@@ -250,7 +270,7 @@ export function getCopilotAnswer(row: Disagreement, org: string, topic: CopilotT
     return `Verify source records for ${row.record_id} across both systems to confirm why the entries do not reconcile.`;
   }
   if (row.reason === 'UNPARSEABLE_VALUE') {
-    return `Inspect the source CSV row for ${row.record_id} (${row.system_b_raw || row.system_a_raw || 'blank'}) and correct the missing or malformed amount before re-importing.`;
+    return `Inspect the source CSV row for ${row.record_id} (${formatUnparseableSource(row)}) and correct the missing or malformed amount before re-importing.`;
   }
   if (row.reason === 'VOIDED_IN_A') {
     return `Confirm whether ${row.record_id} was intentionally voided in System A or whether System B's active entry should be updated.`;

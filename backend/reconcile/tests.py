@@ -149,6 +149,11 @@ class ReconciliationTests(TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['reason'], 'VOIDED_IN_A')
 
+    def test_voided_record_without_system_b_entry_is_not_flagged(self):
+        self._create_a(record_id='REC-1021', total='12000.00', state='VOIDED')
+        rows = find_disagreements('ORG-A')
+        self.assertEqual(rows, [])
+
     def test_catches_date_mismatch(self):
         self._create_a(record_id='REC-1009', total='111699.30', event_date=date(2026, 3, 31))
         self._create_b(entry_id='ENT/2026/4009', raw_ref='REC-1009', raw_value='111699.30', recorded_on=date(2026, 4, 2))
