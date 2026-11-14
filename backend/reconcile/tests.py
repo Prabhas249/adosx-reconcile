@@ -181,11 +181,14 @@ class ReconciliationTests(TestCase):
 
     def test_voided_record_with_multiple_entries_flags_voided_not_duplicate(self):
         self._create_a(record_id='REC-1020', total='1000.00', state='VOIDED')
-        self._create_b(entry_id='ENT/2026/4020', raw_ref='REC-1020', raw_value='500.00')
-        self._create_b(entry_id='ENT/2026/4905', raw_ref='REC-1020', raw_value='500.00')
+        self._create_b(entry_id='ENT/2026/4020', raw_ref='REC-1020', raw_value='400.00')
+        self._create_b(entry_id='ENT/2026/4905', raw_ref='REC-1020', raw_value='350.00')
         rows = find_disagreements('ORG-A')
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]['reason'], 'VOIDED_IN_A')
+        self.assertEqual(rows[0]['system_b_value'], '750.00')
+        self.assertEqual(rows[0]['sort_value'], '1000.00')
+        self.assertEqual(len(rows[0]['system_b_rows']), 2)
 
     def test_unmapped_location_does_not_trigger_false_tenant_mismatch(self):
         self._create_a(record_id='REC-1090', location=self.loc_a1, total='5000.00')
@@ -377,4 +380,30 @@ class ReconciliationTests(TestCase):
             self.assertEqual(disagreements[0]['reason'], 'MULTI_ENTRY_UNRESOLVED')
             self.assertIn('Duplicate record_id REC-1001 appears 2 times in System A', disagreements[0]['detail'])
 
+    def test_importer_replace_false_appends_both_systems_consistently(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_dir = Path(tmp)
+            (tmp_dir / 'locations.csv').write_text(
+                'location_id,org_id,location_name\nLOC-101,ORG-A,Location 101\n',
+                encoding='utf-8',
+            )
+            (tmp_dir / 'system_a.csv').write_text(
+                'record_id,location_id,event_date,category_code,actor_id,base_value,adjustment,total_value,state\n'
+                'REC-1001,LOC-101,2026-03-01,CAT-01,ACT-1,100.00,0.00,100.00,CONFIRMED\n',
+                encoding='utf-8',
+            )
+            (tmp_dir / 'system_b.csv').write_text(
+                'entry_id,record_ref,location_id,recorded_on,value,label\n'
+                'ENT-1,REC-1001,LOC-101,2026-03-01,100.00,ok\n',
+                encoding='utf-8',
+            )
+            first = import_csv_directory(tmp_dir, replace=True)
+            second = import_csv_directory(tmp_dir, replace=False)
+            self.assertEqual((first['system_a'], first['system_b']), (1, 1))
+            self.assertEqual((second['system_a'], second['system_b']), (1, 1))
+            self.assertEqual(SystemARecord.objects.count(), 2)
+            self.assertEqual(SystemBEntry.objects.count(), 2)
+            issues_str = '\n'.join(second['issues'])
+            self.assertIn("duplicate record_id 'REC-1001'", issues_str)
+            self.assertIn("duplicate entry_id 'ENT-1' preserved as 'ENT-1-DUP-ROW-2'", issues_str)
 

@@ -84,7 +84,7 @@ def _unique_id(base_id: str, seen_ids: set[str], row_num: int) -> str:
 
 def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: list[str]) -> int:
     a_count = 0
-    seen_ids: set[str] = set()
+    seen_ids = set(SystemARecord.objects.values_list('record_id', flat=True))
     with path.open('r', encoding='utf-8-sig', newline='') as f:
         for row_num, row in enumerate(csv.DictReader(f), start=2):
             raw_id = row.get('record_id') or ''
@@ -136,7 +136,7 @@ def _load_system_a(path: Path, locations_by_id: dict[str, Location], issues: lis
 
 def _load_system_b(path: Path, locations_by_id: dict[str, Location], issues: list[str]) -> int:
     b_count = 0
-    seen_ids: set[str] = set()
+    seen_ids = set(SystemBEntry.objects.values_list('entry_id', flat=True))
     with path.open('r', encoding='utf-8-sig', newline='') as f:
         for row_num, row in enumerate(csv.DictReader(f), start=2):
             raw_entry_id = (row.get('entry_id') or '').strip()
@@ -163,24 +163,21 @@ def _load_system_b(path: Path, locations_by_id: dict[str, Location], issues: lis
                     f'system_b.csv row {row_num} ({entry_id}): unparseable value {row.get("value")!r}'
                 )
 
-            _, created = SystemBEntry.objects.update_or_create(
+            SystemBEntry.objects.create(
                 entry_id=entry_id,
-                defaults={
-                    'raw_record_ref': raw_ref,
-                    'normalized_record_ref': norm_ref,
-                    'location': loc_obj,
-                    'location_id_raw': loc_raw,
-                    'recorded_on': parse_date_safe(row.get('recorded_on')),
-                    'raw_recorded_on': row.get('recorded_on') or '',
-                    'value': val,
-                    'raw_value': row.get('value') or '',
-                    'value_parse_error': val_err,
-                    'label': (row.get('label') or '').strip(),
-                    'source_row': row_num,
-                },
+                raw_record_ref=raw_ref,
+                normalized_record_ref=norm_ref,
+                location=loc_obj,
+                location_id_raw=loc_raw,
+                recorded_on=parse_date_safe(row.get('recorded_on')),
+                raw_recorded_on=row.get('recorded_on') or '',
+                value=val,
+                raw_value=row.get('value') or '',
+                value_parse_error=val_err,
+                label=(row.get('label') or '').strip(),
+                source_row=row_num,
             )
-            if created:
-                b_count += 1
+            b_count += 1
     return b_count
 
 
